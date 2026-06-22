@@ -1,0 +1,14 @@
+[Unit]
+Description=Homelab Dashboard Stats Agent
+After=network.target docker.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/clay/dashboard/agent.py
+WorkingDirectory=/home/clay/dashboard
+Restart=always
+RestartSec=5
+User=clay
+
+[Install]
+WantedBy=multi-user.target

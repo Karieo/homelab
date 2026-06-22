@@ -18,6 +18,32 @@ DEST="${HOME}/dashboard"
 BRANCH="${UPDATE_BRANCH:-main}"
 FORCE="${1:-}"
 
+# Optional notification channel — set DISCORD_WEBHOOK_URL / NTFY_URL here
+# (shared with the alerter), so deploys announce themselves. Sourced for
+# manual runs; the systemd unit also reads it via EnvironmentFile.
+NOTIFY_ENV="${DEST}/notify.env"
+if [ -f "$NOTIFY_ENV" ]; then
+  set -a; . "$NOTIFY_ENV"; set +a
+fi
+
+# notify_deploy <ok|fail> <message>
+notify_deploy() {
+  local status="$1" message="$2" host color
+  host="$(hostname)"
+  [ "$status" = "fail" ] && color=15158332 || color=3066993
+  if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
+    local payload
+    payload="$(python3 -c 'import json,sys; print(json.dumps({"embeds":[{"title":sys.argv[1]+" deploy","description":sys.argv[2],"color":int(sys.argv[3])}]}))' \
+      "$host" "$message" "$color")"
+    curl -fsS -m 10 -H "Content-Type: application/json" -d "$payload" \
+      "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1 || echo "discord notify failed" >&2
+  fi
+  if [ -n "${NTFY_URL:-}" ]; then
+    curl -fsS -m 10 -H "Title: ${host} deploy" -d "$message" \
+      "$NTFY_URL" >/dev/null 2>&1 || true
+  fi
+}
+
 cd "$REPO_DIR"
 git fetch --quiet origin "$BRANCH"
 LOCAL="$(git rev-parse @)"
@@ -32,6 +58,7 @@ echo "$(date -Is) updating ${LOCAL:0:8} -> ${REMOTE:0:8}"
 if ! git merge --ff-only --quiet "origin/${BRANCH}"; then
   echo "ERROR: cannot fast-forward — local changes on this node?" >&2
   echo "Commit them to the repo (or 'git stash') and re-run." >&2
+  notify_deploy fail "update failed: cannot fast-forward (local changes on $(hostname)?)"
   exit 1
 fi
 
@@ -51,4 +78,6 @@ for svc in dashboard-agent dashboard-alerter dashboard; do
   fi
 done
 
+SUBJECT="$(git log -1 --pretty=%s "$REMOTE" 2>/dev/null || echo "")"
 echo "$(date -Is) update complete (${REMOTE:0:8})"
+notify_deploy ok "updated ${LOCAL:0:8} → ${REMOTE:0:8} — ${SUBJECT}"

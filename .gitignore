@@ -1,6 +1,9 @@
 # Agent runtime data
 dashboard/stats.db
 
+# Local secrets (Discord/ntfy webhook, etc.) — never commit
+dashboard/notify.env
+
 # Python
 __pycache__/
 *.py[cod]

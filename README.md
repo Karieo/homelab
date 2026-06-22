@@ -82,6 +82,25 @@ Notes:
   units without a password; everything else runs as your user.
 - Logs: `journalctl -u dashboard-update.service -f` ·
   next run: `systemctl list-timers dashboard-update.timer`.
+- **Deploy pings:** if a notification channel is configured (see below), each
+  successful deploy posts `<host> deploy — updated <old> → <new> — <commit>` to
+  Discord/ntfy (green), and a fast-forward failure posts a red alert.
+
+#### Shared notification config (`notify.env`)
+
+The alerter and the auto-updater both read an optional `~/dashboard/notify.env`
+(gitignored) so you configure the channel once:
+
+```bash
+cat > ~/dashboard/notify.env <<'EOF'
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx/yyy
+# NTFY_URL=https://ntfy.sh/your-homelab-topic
+EOF
+sudo systemctl restart dashboard-alerter dashboard-update.timer
+```
+
+Both units pull it in via `EnvironmentFile=-`, and `update.sh` also sources it for
+manual runs. (Inline `Environment=` lines in a unit still work and override it.)
 
 ### Extra disks
 

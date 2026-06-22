@@ -56,6 +56,33 @@ reports live network throughput (`rx_bytes_sec`/`tx_bytes_sec`), extra mounted
 disks, and—where configured—a `pihole` summary, `jellyfin` now-playing list, and
 `remndrs_open` count.
 
+### Auto-update (hands-off deploys)
+
+So you don't have to copy files to every node by hand, install the auto-updater on
+each node you want to self-update:
+
+```bash
+cd ~/homelab/dashboard && ./install-updater.sh
+```
+
+It adds a systemd timer (`dashboard-update.timer`, every ~15 min) that runs
+`update.sh`: fetch the tracked branch (`main`), and if there are new commits,
+fast-forward the repo, re-stage `agent.py` / `index.html` / `alerter.py` into
+`~/dashboard`, and restart whichever dashboard services are installed on that node.
+After this, **deploying is just merging to `main`** — each node picks it up on its
+next tick. Run `update.sh --force` (or `sudo systemctl start dashboard-update`) to
+update immediately.
+
+Notes:
+- It's **fast-forward only** and never discards local changes, so keep per-node
+  config committed to the repo. Secrets stay in the systemd unit env, not in files.
+- `git pull` must work non-interactively on the node (stored credential helper, a
+  PAT, or an SSH remote). Test once with `cd ~/homelab && git pull`.
+- A scoped sudoers drop-in lets the timer restart only the three `dashboard-*`
+  units without a password; everything else runs as your user.
+- Logs: `journalctl -u dashboard-update.service -f` ·
+  next run: `systemctl list-timers dashboard-update.timer`.
+
 ### Extra disks
 
 Report a mounted drive beyond root (e.g. the Samsung T7) as its own usage row.

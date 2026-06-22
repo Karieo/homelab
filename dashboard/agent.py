@@ -45,6 +45,18 @@ KNOWN_PORTS = {
     "kiwix": 8080,
 }
 
+# Native (non-Docker) services to report per host, checked via
+# `systemctl is-active`. Some nodes run things like Pi-hole or Kiwix as
+# plain systemd services rather than containers; list them here so they
+# show up alongside Docker containers on the dashboard. `port` builds the
+# click-through link (set to None for no link).
+EXTRA_SERVICES = {
+    "scout": [
+        {"name": "pihole", "unit": "pihole-FTL.service", "port": 80},
+        {"name": "kiwix", "unit": "kiwix.service", "port": 8080},
+    ],
+}
+
 # Matches the published host port in `docker ps` Ports output, e.g.
 # "0.0.0.0:3000->3000/tcp" or ":::8096->8096/tcp".
 _PORT_RE = re.compile(r":(\d+)->")
@@ -111,7 +123,45 @@ def get_containers():
                 "port": port,
             }
         )
-    return sorted(containers, key=lambda c: c["name"])
+    return containers
+
+
+def _systemd_active(unit):
+    """True if a systemd unit is active. Read-only query, no root needed."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", unit],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def get_extra_services(hostname):
+    """Report configured native systemd services for this host."""
+    services = []
+    for svc in EXTRA_SERVICES.get(hostname, []):
+        services.append(
+            {
+                "name": svc["name"],
+                "status": "running" if _systemd_active(svc["unit"]) else "stopped",
+                "port": svc.get("port"),
+            }
+        )
+    return services
+
+
+def get_services(hostname):
+    """Combined, de-duplicated list of Docker containers + native services."""
+    services = get_containers()
+    seen = {s["name"] for s in services}
+    for svc in get_extra_services(hostname):
+        if svc["name"] not in seen:
+            services.append(svc)
+    return sorted(services, key=lambda s: s["name"])
 
 
 def get_tailscale_status():
@@ -175,7 +225,7 @@ def stats():
                 "percent": disk.percent,
             },
             "network": get_tailscale_status(),
-            "containers": get_containers(),
+            "containers": get_services(hostname),
             "timestamp": datetime.datetime.now().isoformat(),
         }
     )

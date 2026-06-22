@@ -11,7 +11,16 @@ DEST="${HOME}/dashboard"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "==> Installing Python dependencies"
-pip3 install --user -r "${SCRIPT_DIR}/requirements.txt"
+# Prefer distro packages — on Debian Bookworm / Raspberry Pi OS, PEP 668
+# marks the environment "externally managed" and blocks plain `pip install`.
+if command -v apt-get > /dev/null 2>&1; then
+  sudo apt-get update -qq || true
+  sudo apt-get install -y python3-flask python3-psutil
+else
+  # Fall back to pip, overriding PEP 668 if present.
+  pip3 install --user -r "${SCRIPT_DIR}/requirements.txt" \
+    || pip3 install --user --break-system-packages -r "${SCRIPT_DIR}/requirements.txt"
+fi
 
 echo "==> Staging agent into ${DEST}"
 mkdir -p "${DEST}"

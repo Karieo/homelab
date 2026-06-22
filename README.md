@@ -45,6 +45,25 @@ browser             ◀── polls every 30s via fetch()
   color-coded clickable service dots. Falls back to an `OFFLINE` panel when a node
   is unreachable.
 
+The agent also exposes **`GET /history?hours=24`** — downsampled CPU/temp/RAM/disk
+samples logged to a local SQLite file (`dashboard/stats.db`, gitignored, 7-day
+retention) and drawn as 24h sparklines under each node. `GET /stats` additionally
+reports live network throughput (`rx_bytes_sec`/`tx_bytes_sec`) and, on a node
+running Pi-hole, a `pihole` summary (queries / blocked / % blocked).
+
+### Pi-hole widget
+
+On the node running Pi-hole, set the web/app password so the agent can query the
+admin API (supports both Pi-hole v6 and v5, auto-detected). Add it to the agent's
+systemd unit and restart:
+
+```ini
+Environment=PIHOLE_PASSWORD=your-pihole-password
+# Environment=PIHOLE_BASE_URL=http://localhost   # if Pi-hole isn't on localhost:80
+```
+
+The host is selected via the `PIHOLE` map in `agent.py` (defaults to `scout`).
+
 ### Deploy
 
 On **every** node you want to monitor (bastion, scout, ...):

@@ -1,3 +1,6 @@
+# Agent runtime data
+dashboard/stats.db
+
 # Python
 __pycache__/
 *.py[cod]

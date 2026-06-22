@@ -88,6 +88,36 @@ PIHOLE = {
     },
 }
 
+# Extra mounted disks to report per host (beyond root). Each is shown as
+# its own usage row. Unmounted/missing paths are skipped silently, so it's
+# safe to list a drive before it's plugged in (e.g. the Samsung T7).
+EXTRA_DISKS = {
+    "bastion": [
+        {"name": "T7", "path": "/mnt/t7"},
+    ],
+}
+
+# Jellyfin "now playing", per host. Provide an API key via the
+# JELLYFIN_API_KEY env var. Leave a host out to disable.
+JELLYFIN = {
+    "bastion": {
+        "base_url": os.environ.get("JELLYFIN_BASE_URL", "http://localhost:8096"),
+        "api_key": os.environ.get("JELLYFIN_API_KEY", ""),
+    },
+}
+
+# Remndrs open-reminder count, per host. The self-hosted Remndrs instance
+# exposes a count endpoint; point `count_url` at it and read `count_field`
+# out of the JSON response. Token optional (sent as a Bearer header).
+# Configure via env so no secret is committed.
+REMNDRS = {
+    "bastion": {
+        "count_url": os.environ.get("REMNDRS_COUNT_URL", ""),
+        "count_field": os.environ.get("REMNDRS_COUNT_FIELD", "count"),
+        "token": os.environ.get("REMNDRS_TOKEN", ""),
+    },
+}
+
 # Matches the published host port in `docker ps` Ports output, e.g.
 # "0.0.0.0:3000->3000/tcp" or ":::8096->8096/tcp".
 _PORT_RE = re.compile(r":(\d+)->")
@@ -393,6 +423,98 @@ def get_pihole_stats(hostname):
             return None
 
 
+# ---- Extra disks -------------------------------------------------------
+
+def get_extra_disks(hostname):
+    """Report usage for configured extra mounts that are actually present."""
+    disks = []
+    for d in EXTRA_DISKS.get(hostname, []):
+        path = d["path"]
+        if not os.path.ismount(path) and not os.path.isdir(path):
+            continue
+        try:
+            usage = psutil.disk_usage(path)
+        except Exception:
+            continue
+        disks.append(
+            {
+                "name": d["name"],
+                "used_gb": round(usage.used / 1e9, 1),
+                "total_gb": round(usage.total / 1e9, 1),
+                "percent": usage.percent,
+            }
+        )
+    return disks
+
+
+# ---- Jellyfin now-playing ---------------------------------------------
+
+def get_jellyfin_now_playing(hostname):
+    """Return a list of currently-playing Jellyfin sessions, or None."""
+    cfg = JELLYFIN.get(hostname)
+    if not cfg or not cfg.get("api_key"):
+        return None
+    base = cfg["base_url"].rstrip("/")
+    try:
+        sessions = _http_json(
+            base + "/Sessions",
+            headers={"X-Emby-Token": cfg["api_key"]},
+        )
+    except Exception:
+        return None
+
+    playing = []
+    for s in sessions or []:
+        item = s.get("NowPlayingItem")
+        if not item:
+            continue
+        # Prefer "Series — Episode" when it's a TV episode.
+        title = item.get("Name", "?")
+        series = item.get("SeriesName")
+        if series:
+            title = f"{series} — {title}"
+        runtime = item.get("RunTimeTicks") or 0
+        position = (s.get("PlayState") or {}).get("PositionTicks") or 0
+        percent = round(position / runtime * 100, 1) if runtime else None
+        playing.append(
+            {
+                "title": title,
+                "user": s.get("UserName"),
+                "percent": percent,
+                "paused": (s.get("PlayState") or {}).get("IsPaused", False),
+            }
+        )
+    return playing
+
+
+# ---- Remndrs open-reminder count --------------------------------------
+
+def get_remndrs_count(hostname):
+    """Return the count of open reminders, or None if not configured/up."""
+    cfg = REMNDRS.get(hostname)
+    if not cfg or not cfg.get("count_url"):
+        return None
+    headers = {}
+    if cfg.get("token"):
+        headers["Authorization"] = "Bearer " + cfg["token"]
+    try:
+        res = _http_json(cfg["count_url"], headers=headers)
+    except Exception:
+        return None
+    # Accept either a bare number or an object with the configured field.
+    if isinstance(res, (int, float)):
+        return int(res)
+    if isinstance(res, dict):
+        val = res.get(cfg.get("count_field", "count"))
+        if isinstance(val, list):
+            return len(val)
+        if isinstance(val, (int, float)):
+            return int(val)
+    if isinstance(res, list):
+        return len(res)
+    return None
+
+
 def get_uptime():
     """Return a compact human-readable uptime string, e.g. "2d 4h 12m"."""
     uptime_seconds = (
@@ -445,12 +567,21 @@ def stats():
         },
         "network": network,
         "containers": get_services(hostname),
+        "extra_disks": get_extra_disks(hostname),
         "timestamp": datetime.datetime.now().isoformat(),
     }
 
     pihole = get_pihole_stats(hostname)
     if pihole:
         payload["pihole"] = pihole
+
+    jellyfin = get_jellyfin_now_playing(hostname)
+    if jellyfin is not None:
+        payload["jellyfin"] = jellyfin
+
+    remndrs = get_remndrs_count(hostname)
+    if remndrs is not None:
+        payload["remndrs_open"] = remndrs
 
     return jsonify(payload)
 

@@ -9,10 +9,15 @@ WorkingDirectory=/home/clay/dashboard
 Restart=always
 RestartSec=5
 User=clay
-# Pi-hole widget (the node running Pi-hole only): set the web/app password
-# so the agent can query the admin API. Uncomment and fill in:
+# Optional integrations — uncomment and fill in on the relevant node.
+# Pi-hole widget (node running Pi-hole):
 # Environment=PIHOLE_PASSWORD=your-pihole-password
 # Environment=PIHOLE_BASE_URL=http://localhost
+# Jellyfin now-playing (node running Jellyfin):
+# Environment=JELLYFIN_API_KEY=your-api-key
+# Environment=JELLYFIN_BASE_URL=http://localhost:8096
+# Remndrs open-reminder count:
+# Environment=REMNDRS_COUNT_URL=http://localhost:3000/api/reminders/open/count
 
 [Install]
 WantedBy=multi-user.target

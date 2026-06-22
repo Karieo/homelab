@@ -45,11 +45,73 @@ browser             ◀── polls every 30s via fetch()
   color-coded clickable service dots. Falls back to an `OFFLINE` panel when a node
   is unreachable.
 
+- **`dashboard/alerter.py`** — optional watcher (runs on bastion) that polls each
+  node and pushes a notification when a node goes offline or CPU temp crosses a
+  threshold. See [Alerts](#alerts).
+
 The agent also exposes **`GET /history?hours=24`** — downsampled CPU/temp/RAM/disk
 samples logged to a local SQLite file (`dashboard/stats.db`, gitignored, 7-day
 retention) and drawn as 24h sparklines under each node. `GET /stats` additionally
-reports live network throughput (`rx_bytes_sec`/`tx_bytes_sec`) and, on a node
-running Pi-hole, a `pihole` summary (queries / blocked / % blocked).
+reports live network throughput (`rx_bytes_sec`/`tx_bytes_sec`), extra mounted
+disks, and—where configured—a `pihole` summary, `jellyfin` now-playing list, and
+`remndrs_open` count.
+
+### Extra disks
+
+Report a mounted drive beyond root (e.g. the Samsung T7) as its own usage row.
+Edit `EXTRA_DISKS` in `agent.py`:
+
+```python
+EXTRA_DISKS = {"bastion": [{"name": "T7", "path": "/mnt/t7"}]}
+```
+
+Unmounted/missing paths are skipped silently, so it's safe to list a drive before
+it's plugged in.
+
+### Jellyfin now-playing
+
+On the node running Jellyfin, set an API key (Jellyfin → Dashboard → API Keys) so
+the agent can read active sessions, then restart the agent:
+
+```ini
+Environment=JELLYFIN_API_KEY=your-api-key
+# Environment=JELLYFIN_BASE_URL=http://localhost:8096
+```
+
+Host selected via the `JELLYFIN` map in `agent.py` (defaults to `bastion`).
+
+### Remndrs open count
+
+Show your open-reminder count. Point the agent at the self-hosted Remndrs count
+endpoint via env (host selected via the `REMNDRS` map, defaults to `bastion`):
+
+```ini
+Environment=REMNDRS_COUNT_URL=http://localhost:3000/api/reminders/open/count
+# Environment=REMNDRS_COUNT_FIELD=count   # JSON field to read (or returns a bare number / array)
+# Environment=REMNDRS_TOKEN=your-token    # sent as a Bearer header if set
+```
+
+### Alerts
+
+Install the alerter on **bastion** (it polls all nodes):
+
+```bash
+./install-alerter.sh
+```
+
+It logs to the journal until you set a notification channel. To get pushes, point
+it at an [ntfy](https://ntfy.sh) topic and restart:
+
+```bash
+sudo systemctl edit --full dashboard-alerter
+#   Environment=NTFY_URL=https://ntfy.sh/your-homelab-topic
+sudo systemctl restart dashboard-alerter
+```
+
+Alerts fire on transitions only (offline ⇄ online, temp high ⇄ cleared) with
+hysteresis, so a persistently-hot node won't spam. Tunables: `ALERT_TEMP_HIGH`
+(default 80°C), `ALERT_TEMP_CLEAR` (72°C), `ALERT_POLL_SEC` (60),
+`ALERT_OFFLINE_AFTER` (2), `ALERT_NODES`.
 
 ### Pi-hole widget
 

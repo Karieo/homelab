@@ -9,6 +9,10 @@ WorkingDirectory=/home/clay/dashboard
 Restart=always
 RestartSec=5
 User=clay
+# Pi-hole widget (the node running Pi-hole only): set the web/app password
+# so the agent can query the admin API. Uncomment and fill in:
+# Environment=PIHOLE_PASSWORD=your-pihole-password
+# Environment=PIHOLE_BASE_URL=http://localhost
 
 [Install]
 WantedBy=multi-user.target

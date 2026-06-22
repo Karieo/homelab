@@ -1,0 +1,23 @@
+[Unit]
+Description=Homelab Alerter (offline / temperature notifications)
+After=network.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/clay/dashboard/alerter.py
+WorkingDirectory=/home/clay/dashboard
+Restart=always
+RestartSec=10
+User=clay
+# Notification channel(s) — set one or both. Without any, the alerter
+# just logs to the journal.
+# Environment=DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx/yyy
+# Environment=NTFY_URL=https://ntfy.sh/your-homelab-topic
+# Environment=NTFY_TOKEN=your-token-if-protected
+# Tunables (defaults shown):
+# Environment=ALERT_TEMP_HIGH=80
+# Environment=ALERT_TEMP_CLEAR=72
+# Environment=ALERT_POLL_SEC=60
+
+[Install]
+WantedBy=multi-user.target

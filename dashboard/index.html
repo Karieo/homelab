@@ -316,6 +316,49 @@
   }
   .ph-lbl { font-size: 10px; color: var(--muted); letter-spacing: 0.06em; }
 
+  /* ---- Remndrs open count ------------------------------------------ */
+  .remndrs {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--warn);
+    margin-top: 6px;
+  }
+
+  /* ---- Jellyfin now-playing ---------------------------------------- */
+  .np {
+    margin-top: 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: #0d0d0d;
+  }
+  .np-head {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 0.14em;
+    margin-bottom: 8px;
+  }
+  .np-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 2px 0;
+  }
+  .np-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .np-dot.playing { background: var(--accent); box-shadow: 0 0 6px rgba(0,255,136,0.6); }
+  .np-dot.paused { background: var(--muted); }
+  .np-title {
+    flex: 1;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .np-meta { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+
   /* ---- 24h trend sparklines ---------------------------------------- */
   .trends {
     margin-top: 16px;
@@ -558,6 +601,47 @@
       </div>`;
   }
 
+  // Escape untrusted strings (e.g. Jellyfin media titles) for HTML.
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  // ---- Extra disks (e.g. external SSD) -------------------------------
+  function extraDiskRows(disks) {
+    return (disks || [])
+      .map((d) =>
+        metricRow(esc(d.name).toUpperCase(), d.percent,
+          `${d.used_gb}/${d.total_gb}G`)
+      )
+      .join("");
+  }
+
+  // ---- Jellyfin now-playing -----------------------------------------
+  function jellyfinBlock(items) {
+    if (!items || !items.length) return "";
+    const rows = items
+      .map((it) => `
+        <div class="np-item">
+          <span class="np-dot ${it.paused ? "paused" : "playing"}"></span>
+          <span class="np-title">${esc(it.title)}</span>
+          <span class="np-meta">${esc(it.user || "")}${
+            it.percent != null ? " · " + Math.round(it.percent) + "%" : ""
+          }</span>
+        </div>`)
+      .join("");
+    return `<div class="np"><div class="np-head">▶ NOW PLAYING</div>${rows}</div>`;
+  }
+
+  // ---- Remndrs open count -------------------------------------------
+  function remndrsLine(n) {
+    if (n == null) return "";
+    return `<div class="remndrs">▣ ${fmtNum(n)} open reminder${
+      n === 1 ? "" : "s"
+    }</div>`;
+  }
+
   function serviceRow(c, host) {
     const cls = c.status === "running" ? "running" : "stopped";
     const portTxt = c.port ? `:${c.port}` : "";
@@ -598,6 +682,7 @@
             <div class="ts-ip ${tsUp ? "" : "down"}">
               <span class="dot">●</span> ${net.tailscale_ip || "no tailscale"}
             </div>
+            ${remndrsLine(data.remndrs_open)}
           </div>
         </div>
 
@@ -608,11 +693,14 @@
               data.ram ? `${data.ram.used_gb}/${data.ram.total_gb}G` : "—")}
           ${metricRow("DISK", data.disk ? data.disk.percent : 0,
               data.disk ? `${data.disk.used_gb}/${data.disk.total_gb}G` : "—")}
+          ${extraDiskRows(data.extra_disks)}
         </div>
 
         ${netLine(net)}
 
         ${piholeBlock(data.pihole)}
+
+        ${jellyfinBlock(data.jellyfin)}
 
         <div class="trends">${trendsBlock(history)}</div>
 

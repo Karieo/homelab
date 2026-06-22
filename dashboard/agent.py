@@ -234,7 +234,37 @@ def get_services(hostname):
 
 
 def get_tailscale_status():
-    """Return the node's Tailscale IP and connection state."""
+    """Return the node's Tailscale IP, MagicDNS hostname, and state.
+
+    The MagicDNS hostname (e.g. "bastion.tailnet.ts.net") is preferred for
+    building service links so they resolve from anywhere on the tailnet.
+    """
+    info = {
+        "tailscale_ip": None,
+        "tailscale_hostname": None,
+        "tailscale_status": "disconnected",
+    }
+    # `tailscale status --json` gives both the IP and the MagicDNS name.
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self_node = json.loads(result.stdout).get("Self", {})
+        ips = self_node.get("TailscaleIPs") or []
+        dns = (self_node.get("DNSName") or "").rstrip(".")
+        if ips:
+            info["tailscale_ip"] = ips[0]
+        if dns:
+            info["tailscale_hostname"] = dns
+        if ips or dns:
+            info["tailscale_status"] = "connected"
+            return info
+    except Exception:
+        pass
+    # Fallback: at least get the IP from `tailscale ip -4`.
     try:
         result = subprocess.run(
             ["tailscale", "ip", "-4"],
@@ -244,10 +274,11 @@ def get_tailscale_status():
         )
         ip = result.stdout.strip().split("\n")[0]
         if ip:
-            return {"tailscale_ip": ip, "tailscale_status": "connected"}
+            info["tailscale_ip"] = ip
+            info["tailscale_status"] = "connected"
     except Exception:
         pass
-    return {"tailscale_ip": None, "tailscale_status": "disconnected"}
+    return info
 
 
 def get_network_throughput():

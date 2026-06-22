@@ -234,6 +234,10 @@
     font-size: 11px;
     color: var(--muted);
     margin-top: 6px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .ts-ip .dot { color: var(--accent); }
   .ts-ip.down .dot { color: var(--danger); }
@@ -657,12 +661,15 @@
   }
 
   function renderPanel(ep, data, history) {
-    const services = (data.containers || [])
-      .map((c) => serviceRow(c, ep.host))
-      .join("");
-
     const net = data.network || {};
     const tsUp = net.tailscale_status === "connected";
+
+    // Prefer the node's Tailscale MagicDNS hostname so service links resolve
+    // from anywhere on the tailnet; fall back to the configured host.
+    const linkHost = net.tailscale_hostname || ep.host;
+    const services = (data.containers || [])
+      .map((c) => serviceRow(c, linkHost))
+      .join("");
 
     return `
       <div class="panel">
@@ -679,8 +686,9 @@
           <div class="uptime-block">
             <div class="uptime-label">UPTIME</div>
             <div class="uptime-value">${data.uptime || "—"}</div>
-            <div class="ts-ip ${tsUp ? "" : "down"}">
-              <span class="dot">●</span> ${net.tailscale_ip || "no tailscale"}
+            <div class="ts-ip ${tsUp ? "" : "down"}"
+                 title="${esc(net.tailscale_ip || "")}">
+              <span class="dot">●</span> ${esc(net.tailscale_hostname || net.tailscale_ip || "no tailscale")}
             </div>
             ${remndrsLine(data.remndrs_open)}
           </div>

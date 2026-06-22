@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for Homelab Dashboard updates periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

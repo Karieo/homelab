@@ -1,0 +1,10 @@
+[Unit]
+Description=Homelab Dashboard Auto-Update (git pull + redeploy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/clay/dashboard/update.sh
+WorkingDirectory=/home/clay/dashboard
+User=clay

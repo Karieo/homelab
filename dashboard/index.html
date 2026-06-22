@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#0a0a0a" />
+<title>Homelab Ops</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --card: #111111;
+    --border: #1e1e1e;
+    --accent: #00ff88;
+    --warn: #ffaa00;
+    --danger: #ff4444;
+    --text: #e0e0e0;
+    --muted: #555555;
+    --data: #ffffff;
+    --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+    --sans: "Inter", system-ui, -apple-system, sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    padding: 16px;
+    min-height: 100vh;
+  }
+
+  /* ---- Header ------------------------------------------------------ */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    font-size: 15px;
+  }
+
+  .pulse {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+  }
+
+  .updated {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    text-align: right;
+  }
+  .updated .count { color: var(--text); }
+
+  /* ---- Grid -------------------------------------------------------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 8px;
+    padding: 18px;
+    min-height: 200px;
+  }
+
+  .panel.offline {
+    border-color: rgba(255, 68, 68, 0.4);
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+  }
+
+  .panel-host {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .panel-role { color: var(--muted); font-size: 12px; }
+
+  .status-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .status-tag.online { color: var(--accent); border: 1px solid rgba(0,255,136,0.3); }
+  .status-tag.offline { color: var(--danger); border: 1px solid rgba(255,68,68,0.4); }
+
+  /* ---- Metrics ----------------------------------------------------- */
+  .metrics { display: flex; flex-direction: column; gap: 12px; }
+
+  .metric {
+    display: grid;
+    grid-template-columns: 48px 1fr auto;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .metric-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+  }
+
+  .bar {
+    height: 8px;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    transition: width 0.6s ease, background 0.4s ease;
+  }
+
+  .metric-value {
+    font-family: var(--mono);
+    font-weight: 500;
+    color: var(--data);
+    font-size: 13px;
+    min-width: 64px;
+    text-align: right;
+  }
+
+  /* ---- Temp gauge (signature element) ------------------------------ */
+  .gauge-row {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin: 4px 0 14px;
+  }
+  .gauge { position: relative; width: 120px; height: 72px; flex-shrink: 0; }
+  .gauge svg { width: 100%; height: 100%; overflow: visible; }
+  .gauge-arc-bg { fill: none; stroke: #000; stroke-width: 8; stroke-linecap: round; }
+  .gauge-arc-fill {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.8s ease, stroke 0.6s ease;
+  }
+  .gauge-readout {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+  }
+  .gauge-temp {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 22px;
+    color: var(--data);
+  }
+  .gauge-temp small { font-size: 13px; color: var(--muted); }
+  .gauge-caption {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+  }
+
+  .uptime-block { flex: 1; }
+  .uptime-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+  }
+  .uptime-value {
+    font-family: var(--mono);
+    font-weight: 500;
+    color: var(--data);
+    font-size: 16px;
+  }
+  .ts-ip {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+  .ts-ip .dot { color: var(--accent); }
+  .ts-ip.down .dot { color: var(--danger); }
+
+  /* ---- Services ---------------------------------------------------- */
+  .services-head {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    margin: 18px 0 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+  }
+
+  .services { display: flex; flex-direction: column; gap: 2px; }
+
+  .service {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    text-decoration: none;
+    transition: background 0.15s ease;
+  }
+  a.service:hover { background: rgba(255,255,255,0.04); }
+  a.service:hover .svc-name { color: var(--accent); }
+
+  .svc-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .svc-dot.running { background: var(--accent); box-shadow: 0 0 6px rgba(0,255,136,0.6); }
+  .svc-dot.stopped { background: var(--danger); box-shadow: 0 0 6px rgba(255,68,68,0.5); }
+
+  .svc-name { flex: 1; }
+  .svc-port { color: var(--muted); font-size: 11px; }
+
+  .offline-msg {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 48px 0;
+    color: var(--danger);
+    font-family: var(--mono);
+    letter-spacing: 0.16em;
+    font-weight: 700;
+  }
+  .offline-msg .sub {
+    color: var(--muted);
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    font-size: 12px;
+  }
+
+  footer {
+    margin-top: 16px;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="pulse"></span>HOMELAB OPS</div>
+    <div class="updated">
+      last updated <span class="count" id="countdown">—</span>
+    </div>
+  </header>
+
+  <div class="grid" id="grid"></div>
+
+  <footer>polling every 30s · tailscale-only</footer>
+
+<script>
+  // ---- Config --------------------------------------------------------
+  // Each node the dashboard should display. `url` is the agent's /stats
+  // endpoint; `host` is used to build click-through links to services.
+  const ENDPOINTS = [
+    { key: "bastion", host: "bastion", url: "http://bastion:9090/stats" },
+    { key: "scout",   host: "scout",   url: "http://scout:9090/stats" },
+  ];
+
+  const REFRESH_MS = 30000;
+  const GAUGE_MIN = 20;   // °C — bottom of the temperature arc
+  const GAUGE_MAX = 90;   // °C — top of the temperature arc (critical)
+
+  // ---- Color helpers -------------------------------------------------
+  function pctColor(pct) {
+    if (pct >= 85) return "var(--danger)";
+    if (pct >= 65) return "var(--warn)";
+    return "var(--accent)";
+  }
+
+  function tempColor(t) {
+    if (t == null) return "var(--muted)";
+    if (t >= 75) return "var(--danger)";
+    if (t >= 60) return "var(--warn)";
+    return "var(--accent)";
+  }
+
+  // ---- Temperature arc (signature element) ---------------------------
+  // Builds a 180° arc as an SVG path. Radius 50, centered at (60,60).
+  const ARC_LENGTH = Math.PI * 50; // half-circumference of r=50
+
+  function gaugeSvg(temp) {
+    const arcPath = "M 10 60 A 50 50 0 0 1 110 60";
+    let offset = ARC_LENGTH;
+    let color = "var(--muted)";
+    let label = "--";
+    if (temp != null) {
+      const frac = Math.min(1, Math.max(0, (temp - GAUGE_MIN) / (GAUGE_MAX - GAUGE_MIN)));
+      offset = ARC_LENGTH * (1 - frac);
+      color = tempColor(temp);
+      label = Math.round(temp);
+    }
+    return `
+      <div class="gauge">
+        <svg viewBox="0 0 120 70">
+          <path class="gauge-arc-bg" d="${arcPath}" />
+          <path class="gauge-arc-fill" d="${arcPath}"
+                stroke="${color}"
+                stroke-dasharray="${ARC_LENGTH}"
+                stroke-dashoffset="${offset}" />
+        </svg>
+        <div class="gauge-readout">
+          <div class="gauge-temp">${label}<small>°C</small></div>
+          <div class="gauge-caption">CPU TEMP</div>
+        </div>
+      </div>`;
+  }
+
+  // ---- Rendering -----------------------------------------------------
+  function metricRow(label, pct, valueText) {
+    const color = pctColor(pct);
+    const width = Math.min(100, Math.max(0, pct));
+    return `
+      <div class="metric">
+        <span class="metric-label">${label}</span>
+        <div class="bar"><div class="bar-fill" style="width:${width}%;background:${color}"></div></div>
+        <span class="metric-value">${valueText}</span>
+      </div>`;
+  }
+
+  function serviceRow(c, host) {
+    const cls = c.status === "running" ? "running" : "stopped";
+    const portTxt = c.port ? `:${c.port}` : "";
+    const inner = `
+      <span class="svc-dot ${cls}"></span>
+      <span class="svc-name">${c.name}</span>
+      <span class="svc-port">${portTxt}</span>`;
+    if (c.status === "running" && c.port) {
+      const href = `http://${host}:${c.port}`;
+      return `<a class="service" href="${href}" target="_blank" rel="noopener">${inner}</a>`;
+    }
+    return `<div class="service">${inner}</div>`;
+  }
+
+  function renderPanel(ep, data) {
+    const services = (data.containers || [])
+      .map((c) => serviceRow(c, ep.host))
+      .join("");
+
+    const net = data.network || {};
+    const tsUp = net.tailscale_status === "connected";
+
+    return `
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-host">${data.hostname || ep.key}</div>
+            <div class="panel-role">${data.role || ""}</div>
+          </div>
+          <span class="status-tag online">ONLINE</span>
+        </div>
+
+        <div class="gauge-row">
+          ${gaugeSvg(data.cpu ? data.cpu.temp_celsius : null)}
+          <div class="uptime-block">
+            <div class="uptime-label">UPTIME</div>
+            <div class="uptime-value">${data.uptime || "—"}</div>
+            <div class="ts-ip ${tsUp ? "" : "down"}">
+              <span class="dot">●</span> ${net.tailscale_ip || "no tailscale"}
+            </div>
+          </div>
+        </div>
+
+        <div class="metrics">
+          ${metricRow("CPU", data.cpu ? data.cpu.percent : 0,
+              data.cpu ? `${data.cpu.percent}%` : "—")}
+          ${metricRow("RAM", data.ram ? data.ram.percent : 0,
+              data.ram ? `${data.ram.used_gb}/${data.ram.total_gb}G` : "—")}
+          ${metricRow("DISK", data.disk ? data.disk.percent : 0,
+              data.disk ? `${data.disk.used_gb}/${data.disk.total_gb}G` : "—")}
+        </div>
+
+        <div class="services-head">SERVICES</div>
+        <div class="services">${services || '<div class="service"><span class="svc-name" style="color:var(--muted)">no containers</span></div>'}</div>
+      </div>`;
+  }
+
+  function renderOffline(ep) {
+    return `
+      <div class="panel offline">
+        <div class="panel-head">
+          <div>
+            <div class="panel-host">${ep.key}</div>
+            <div class="panel-role">unreachable</div>
+          </div>
+          <span class="status-tag offline">OFFLINE</span>
+        </div>
+        <div class="offline-msg">
+          OFFLINE
+          <span class="sub">no response from ${ep.url}</span>
+        </div>
+      </div>`;
+  }
+
+  // ---- Polling -------------------------------------------------------
+  async function fetchNode(ep) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const res = await fetch(ep.url, { signal: ctrl.signal, cache: "no-store" });
+      if (!res.ok) throw new Error("bad status " + res.status);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function refresh() {
+    const grid = document.getElementById("grid");
+    const results = await Promise.all(
+      ENDPOINTS.map(async (ep) => {
+        try {
+          const data = await fetchNode(ep);
+          return renderPanel(ep, data);
+        } catch (e) {
+          return renderOffline(ep);
+        }
+      })
+    );
+    grid.innerHTML = results.join("");
+    lastUpdate = Date.now();
+  }
+
+  // ---- Countdown ticker ---------------------------------------------
+  let lastUpdate = Date.now();
+  function tick() {
+    const secs = Math.floor((Date.now() - lastUpdate) / 1000);
+    document.getElementById("countdown").textContent = secs + "s ago";
+  }
+
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+  setInterval(tick, 1000);
+</script>
+</body>
+</html>

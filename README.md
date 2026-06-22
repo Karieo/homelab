@@ -99,14 +99,19 @@ Install the alerter on **bastion** (it polls all nodes):
 ./install-alerter.sh
 ```
 
-It logs to the journal until you set a notification channel. To get pushes, point
-it at an [ntfy](https://ntfy.sh) topic and restart:
+It logs to the journal until you set a notification channel. Configure **Discord**
+and/or **ntfy** (it sends to every channel set), then restart:
 
 ```bash
 sudo systemctl edit --full dashboard-alerter
+#   Environment=DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx/yyy
 #   Environment=NTFY_URL=https://ntfy.sh/your-homelab-topic
 sudo systemctl restart dashboard-alerter
 ```
+
+For Discord, create the webhook in the target channel: **Server Settings →
+Integrations → Webhooks → New Webhook → Copy Webhook URL**. Alerts arrive as
+colored embeds (red for offline / hot, green for recovered).
 
 Alerts fire on transitions only (offline ⇄ online, temp high ⇄ cleared) with
 hysteresis, so a persistently-hot node won't spam. Tunables: `ALERT_TEMP_HIGH`

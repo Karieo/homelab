@@ -10,8 +10,13 @@ Runs as a systemd service on bastion. State is in-memory; alerts fire on
 transitions only. With no ntfy channel configured it logs to stdout, so
 it's safe to run before you've set NTFY_URL.
 
+Notifications go to every configured channel (and always to stdout). With
+none configured it just logs.
+
 Config via environment (set in the systemd unit):
-  NTFY_URL            e.g. https://ntfy.sh/my-homelab-topic   (empty = log only)
+  DISCORD_WEBHOOK_URL Discord channel webhook URL (Server Settings →
+                      Integrations → Webhooks)
+  NTFY_URL            e.g. https://ntfy.sh/my-homelab-topic
   NTFY_TOKEN          optional bearer token for a protected ntfy server
   ALERT_NODES         "bastion=http://localhost:9090/stats,scout=http://scout:9090/stats"
   ALERT_POLL_SEC      poll interval, default 60
@@ -49,29 +54,56 @@ OFFLINE_AFTER = int(os.environ.get("ALERT_OFFLINE_AFTER", "2"))
 
 NTFY_URL = os.environ.get("NTFY_URL", "").strip()
 NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "").strip()
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+
+# Embed colors for Discord, by severity.
+_DISCORD_COLORS = {"high": 0xE74C3C, "default": 0x2ECC71}
 
 # host -> {"online": bool, "temp_high": bool, "fail": int}
 state = {}
 
 
-def notify(title, message, priority="default", tags=""):
-    """Send an ntfy push, or log to stdout if no channel is configured."""
-    line = f"[alert] {title}: {message}"
-    print(line, flush=True)
-    if not NTFY_URL:
-        return
+def _send_ntfy(title, message, priority, tags):
     headers = {"Title": title, "Priority": priority}
     if tags:
         headers["Tags"] = tags
     if NTFY_TOKEN:
         headers["Authorization"] = "Bearer " + NTFY_TOKEN
-    try:
-        req = urllib.request.Request(
-            NTFY_URL, data=message.encode(), headers=headers
-        )
-        urllib.request.urlopen(req, timeout=10)
-    except Exception as e:
-        print("notify failed:", e, flush=True)
+    req = urllib.request.Request(NTFY_URL, data=message.encode(), headers=headers)
+    urllib.request.urlopen(req, timeout=10)
+
+
+def _send_discord(title, message, priority):
+    payload = {
+        "embeds": [
+            {
+                "title": title,
+                "description": message,
+                "color": _DISCORD_COLORS.get(priority, _DISCORD_COLORS["default"]),
+            }
+        ]
+    }
+    req = urllib.request.Request(
+        DISCORD_WEBHOOK_URL,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req, timeout=10)
+
+
+def notify(title, message, priority="default", tags=""):
+    """Send to every configured channel; always log to stdout."""
+    print(f"[alert] {title}: {message}", flush=True)
+    channels = []
+    if NTFY_URL:
+        channels.append(("ntfy", lambda: _send_ntfy(title, message, priority, tags)))
+    if DISCORD_WEBHOOK_URL:
+        channels.append(("discord", lambda: _send_discord(title, message, priority)))
+    for name, send in channels:
+        try:
+            send()
+        except Exception as e:
+            print(f"notify via {name} failed:", e, flush=True)
 
 
 def _fetch(url):
@@ -126,9 +158,14 @@ def check(host, url):
 
 
 def main():
+    channels = []
+    if DISCORD_WEBHOOK_URL:
+        channels.append("discord")
+    if NTFY_URL:
+        channels.append("ntfy")
     print(
         f"alerter watching {list(NODES)} every {POLL_INTERVAL_SEC}s; "
-        f"ntfy={'on' if NTFY_URL else 'off (log only)'}; "
+        f"channels={','.join(channels) if channels else 'none (log only)'}; "
         f"temp high={TEMP_HIGH_C}°C clear={TEMP_CLEAR_C}°C",
         flush=True,
     )

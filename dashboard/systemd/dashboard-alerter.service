@@ -9,8 +9,9 @@ WorkingDirectory=/home/clay/dashboard
 Restart=always
 RestartSec=10
 User=clay
-# Notification channel — set your ntfy topic URL to receive pushes.
-# Without it the alerter just logs to the journal.
+# Notification channel(s) — set one or both. Without any, the alerter
+# just logs to the journal.
+# Environment=DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx/yyy
 # Environment=NTFY_URL=https://ntfy.sh/your-homelab-topic
 # Environment=NTFY_TOKEN=your-token-if-protected
 # Tunables (defaults shown):

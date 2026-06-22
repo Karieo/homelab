@@ -72,6 +72,10 @@ Then open **http://bastion:9091** from anywhere on Tailscale.
   in `dashboard/index.html`.
 - **Roles / known service ports:** edit `ROLES` and `KNOWN_PORTS` in
   `dashboard/agent.py`.
+- **Native (non-Docker) services:** some nodes run services like Pi-hole or
+  Kiwix as plain systemd units rather than containers. List them per host in
+  `EXTRA_SERVICES` in `dashboard/agent.py` — the agent checks each with
+  `systemctl is-active` and reports them alongside Docker containers.
 - **Refresh interval / temp gauge range:** `REFRESH_MS`, `GAUGE_MIN`, `GAUGE_MAX`
   in `index.html`.
 

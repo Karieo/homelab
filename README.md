@@ -177,6 +177,30 @@ Environment=PIHOLE_PASSWORD=your-pihole-password
 
 The host is selected via the `PIHOLE` map in `agent.py` (defaults to `scout`).
 
+### WiFi setup panel
+
+On any node with a wireless interface (`wlan0`), the dashboard shows a **WiFi
+Setup** panel: SSID, password, a "Clone MAC" checkbox (pre-filled with
+`80:B9:89:90:7C:CA`), and a **Connect** button. Submitting it `POST`s to the
+agent's `/wifi/connect`, which runs `nmcli` to (re)create a profile on `wlan0` and
+bring it up; the panel then shows the live connection status (SSID · IP · signal).
+`GET /wifi/status` returns the same status.
+
+The agent runs `nmcli` via passwordless sudo. `install-agent.sh` sets up the
+scoped sudoers drop-in automatically when `wlan0` + `nmcli` are present. For a node
+that's already installed (auto-update only copies files), add it once:
+
+```bash
+echo "$USER ALL=(root) NOPASSWD: $(command -v nmcli)" \
+  | sudo tee /etc/sudoers.d/dashboard-nmcli && sudo chmod 0440 /etc/sudoers.d/dashboard-nmcli
+sudo systemctl restart dashboard-agent
+```
+
+> ⚠️ **Security:** this endpoint is unauthenticated (like the rest of the
+> dashboard) and reconfigures the node's WiFi. It's intended for Tailscale-only
+> access. SSID/password are passed to `nmcli` as argv (no shell injection), but the
+> PSK is briefly visible in the node's process list while connecting.
+
 ### Deploy
 
 On **every** node you want to monitor (bastion, scout, ...):

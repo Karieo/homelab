@@ -432,6 +432,80 @@
     font-size: 11px;
     color: var(--muted);
   }
+
+  /* ---- WiFi setup panel -------------------------------------------- */
+  #wifi:empty { display: none; }
+  #wifi { margin-top: 16px; }
+  .wifi-panel { max-width: 520px; }
+  .wifi-current {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .wifi-current.up { color: var(--accent); }
+  .wifi-current.up .dot { color: var(--accent); }
+  .wifi-current.down .dot { color: var(--danger); }
+
+  #wifi-form { display: flex; flex-direction: column; gap: 12px; }
+  .wifi-field { display: flex; flex-direction: column; gap: 5px; }
+  .wifi-field > span {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+  }
+  .wifi-panel input[type="text"],
+  .wifi-panel input[type="password"] {
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 9px 10px;
+    color: var(--data);
+    font-family: var(--mono);
+    font-size: 13px;
+    width: 100%;
+  }
+  .wifi-panel input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .wifi-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+  }
+  .wifi-check input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+  .wifi-check input[type="text"] { flex: 1; }
+  .wifi-check input:disabled { opacity: 0.4; }
+
+  .wifi-btn {
+    background: var(--accent);
+    color: #001b0f;
+    border: none;
+    border-radius: 4px;
+    padding: 10px 14px;
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+  .wifi-btn:hover { opacity: 0.85; }
+  .wifi-btn:disabled { opacity: 0.5; cursor: default; }
+
+  .wifi-result {
+    font-family: var(--mono);
+    font-size: 12px;
+    min-height: 16px;
+    word-break: break-word;
+  }
+  .wifi-result.pending { color: var(--warn); }
+  .wifi-result.ok { color: var(--accent); }
+  .wifi-result.err { color: var(--danger); }
 </style>
 </head>
 <body>
@@ -443,6 +517,8 @@
   </header>
 
   <div class="grid" id="grid"></div>
+
+  <div id="wifi"></div>
 
   <footer>polling every 30s · tailscale-only</footer>
 
@@ -751,8 +827,113 @@
     return ep.url.replace(/\/stats\b.*$/, "/history?hours=24");
   }
 
+  // ---- WiFi setup panel (built once; survives auto-refresh) ----------
+  const DEFAULT_MAC = "80:B9:89:90:7C:CA";
+
+  function buildWifiPanel(ep) {
+    const el = document.getElementById("wifi");
+    el.dataset.connectUrl = ep.url.replace(/\/stats\b.*$/, "/wifi/connect");
+    el.innerHTML = `
+      <div class="panel wifi-panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-host">WIFI SETUP</div>
+            <div class="panel-role">${esc(ep.key)} · wlan0</div>
+          </div>
+          <span class="wifi-current" id="wifi-current"></span>
+        </div>
+        <form id="wifi-form" autocomplete="off">
+          <label class="wifi-field">
+            <span>SSID</span>
+            <input id="wifi-ssid" type="text" placeholder="network name" required />
+          </label>
+          <label class="wifi-field">
+            <span>PASSWORD</span>
+            <input id="wifi-pass" type="password" placeholder="leave blank if open" />
+          </label>
+          <label class="wifi-check">
+            <input id="wifi-clone" type="checkbox" checked />
+            <span>Clone MAC</span>
+            <input id="wifi-mac" type="text" value="${DEFAULT_MAC}" />
+          </label>
+          <button id="wifi-connect-btn" type="submit" class="wifi-btn">Connect</button>
+          <div id="wifi-result" class="wifi-result"></div>
+        </form>
+      </div>`;
+    document.getElementById("wifi-form").addEventListener("submit", onWifiSubmit);
+    // Disable the MAC field when cloning is unchecked.
+    const clone = document.getElementById("wifi-clone");
+    const macIn = document.getElementById("wifi-mac");
+    clone.addEventListener("change", () => { macIn.disabled = !clone.checked; });
+  }
+
+  function updateWifiCurrent(wifi) {
+    const s = document.getElementById("wifi-current");
+    if (!s) return;
+    if (wifi && wifi.connected) {
+      s.className = "wifi-current up";
+      s.innerHTML = `<span class="dot">●</span> ${esc(wifi.ssid)}` +
+        (wifi.ip ? ` · ${esc(wifi.ip)}` : "") +
+        (wifi.signal ? ` · ${esc(wifi.signal)}%` : "");
+    } else {
+      s.className = "wifi-current down";
+      s.innerHTML = `<span class="dot">●</span> not connected`;
+    }
+  }
+
+  function syncWifiPanel(ctx) {
+    const el = document.getElementById("wifi");
+    if (!ctx) { el.innerHTML = ""; return; }   // node gone / no wifi
+    if (!document.getElementById("wifi-form")) buildWifiPanel(ctx.ep);
+    updateWifiCurrent(ctx.wifi);
+  }
+
+  async function onWifiSubmit(e) {
+    e.preventDefault();
+    const url = document.getElementById("wifi").dataset.connectUrl;
+    const ssid = document.getElementById("wifi-ssid").value.trim();
+    const password = document.getElementById("wifi-pass").value;
+    const clone = document.getElementById("wifi-clone").checked;
+    const mac = document.getElementById("wifi-mac").value.trim();
+    const out = document.getElementById("wifi-result");
+    const btn = document.getElementById("wifi-connect-btn");
+
+    if (!ssid) { out.className = "wifi-result err"; out.textContent = "SSID is required"; return; }
+
+    out.className = "wifi-result pending";
+    out.textContent = "Connecting…";
+    btn.disabled = true;
+    // nmcli can take a while to associate + get DHCP.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 95000);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid, password, clone_mac: clone, mac }),
+        signal: ctrl.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        out.className = "wifi-result ok";
+        out.textContent = "✓ " + (data.message || "Connected");
+      } else {
+        out.className = "wifi-result err";
+        out.textContent = "✗ " + (data.error || ("HTTP " + res.status));
+      }
+      if (data.status) updateWifiCurrent(data.status);
+    } catch (err) {
+      out.className = "wifi-result err";
+      out.textContent = "✗ " + (err.name === "AbortError" ? "timed out" : err.message);
+    } finally {
+      clearTimeout(timer);
+      btn.disabled = false;
+    }
+  }
+
   async function refresh() {
     const grid = document.getElementById("grid");
+    let wifiCtx = null;
     const results = await Promise.all(
       ENDPOINTS.map(async (ep) => {
         try {
@@ -764,6 +945,8 @@
           } catch (e) {
             history = null;
           }
+          // A node that reports a wifi block gets the setup panel.
+          if (data.wifi) wifiCtx = { ep, wifi: data.wifi };
           return renderPanel(ep, data, history);
         } catch (e) {
           return renderOffline(ep);
@@ -771,6 +954,7 @@
       })
     );
     grid.innerHTML = results.join("");
+    syncWifiPanel(wifiCtx);
     lastUpdate = Date.now();
   }
 

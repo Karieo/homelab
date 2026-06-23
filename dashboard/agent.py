@@ -130,12 +130,17 @@ _pihole_lock = threading.Lock()
 _net_lock = threading.Lock()
 _net_last = {"ts": None, "rx": 0, "tx": 0}
 
+# Wireless interface managed by the WiFi setup panel (NetworkManager).
+WIFI_IFACE = os.environ.get("WIFI_IFACE", "wlan0")
+_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
 
 @app.after_request
 def add_cors_headers(response):
     """Allow the dashboard (served from another origin) to fetch us."""
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
 
 
@@ -546,6 +551,99 @@ def get_remndrs_count(hostname):
     return None
 
 
+# ---- WiFi (NetworkManager) --------------------------------------------
+
+def has_iface(iface):
+    return os.path.exists(f"/sys/class/net/{iface}")
+
+
+def get_wifi_status(iface=None):
+    """Return the wireless interface's current connection state."""
+    iface = iface or WIFI_IFACE
+    info = {
+        "iface": iface,
+        "connected": False,
+        "ssid": None,
+        "ip": None,
+        "signal": None,
+    }
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f",
+             "GENERAL.STATE,GENERAL.CONNECTION,IP4.ADDRESS", "device", "show",
+             iface],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("GENERAL.CONNECTION:"):
+                con = line.split(":", 1)[1].strip()
+                if con and con != "--":
+                    info["ssid"] = con
+                    info["connected"] = True
+            elif line.startswith("IP4.ADDRESS"):
+                info["ip"] = line.split(":", 1)[1].split("/")[0].strip() or None
+    except Exception:
+        return info
+    # Signal strength of the active AP.
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "ACTIVE,SIGNAL", "device", "wifi"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            parts = line.split(":")
+            if parts and parts[0] == "yes" and len(parts) > 1:
+                info["signal"] = parts[1]
+                break
+    except Exception:
+        pass
+    return info
+
+
+def wifi_connect(ssid, password, clone_mac, mac, iface=None):
+    """Create/refresh an nmcli wifi profile and bring it up on `iface`.
+
+    Runs nmcli via sudo (see the dashboard-nmcli sudoers drop-in). All
+    values are passed as argv (never a shell string), so SSID/password
+    can't inject commands.
+    """
+    iface = iface or WIFI_IFACE
+    con = ssid
+
+    # Replace any stale profile of the same name so settings are clean.
+    subprocess.run(
+        ["sudo", "-n", "nmcli", "connection", "delete", con],
+        capture_output=True, text=True, timeout=20,
+    )
+
+    add_cmd = [
+        "sudo", "-n", "nmcli", "connection", "add", "type", "wifi",
+        "ifname", iface, "con-name", con, "ssid", ssid,
+    ]
+    if password:
+        add_cmd += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password]
+    if clone_mac and mac:
+        add_cmd += ["802-11-wireless.cloned-mac-address", mac]
+
+    r = subprocess.run(add_cmd, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return {"ok": False, "error": (r.stderr or r.stdout).strip()}
+
+    r2 = subprocess.run(
+        ["sudo", "-n", "nmcli", "connection", "up", con],
+        capture_output=True, text=True, timeout=90,
+    )
+    if r2.returncode != 0:
+        # Leave no half-activated profile behind on failure.
+        subprocess.run(
+            ["sudo", "-n", "nmcli", "connection", "delete", con],
+            capture_output=True, text=True, timeout=20,
+        )
+        return {"ok": False, "error": (r2.stderr or r2.stdout).strip()}
+
+    return {"ok": True, "message": (r2.stdout or "Connected").strip()}
+
+
 def get_uptime():
     """Return a compact human-readable uptime string, e.g. "2d 4h 12m"."""
     uptime_seconds = (
@@ -614,7 +712,40 @@ def stats():
     if remndrs is not None:
         payload["remndrs_open"] = remndrs
 
+    if has_iface(WIFI_IFACE):
+        payload["wifi"] = get_wifi_status()
+
     return jsonify(payload)
+
+
+@app.route("/wifi/status")
+def wifi_status():
+    if not has_iface(WIFI_IFACE):
+        return jsonify({"error": "no wifi interface"}), 400
+    return jsonify(get_wifi_status())
+
+
+@app.route("/wifi/connect", methods=["POST", "OPTIONS"])
+def wifi_connect_route():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not has_iface(WIFI_IFACE):
+        return jsonify({"ok": False, "error": "no wifi interface"}), 400
+
+    body = request.get_json(silent=True) or {}
+    ssid = (body.get("ssid") or "").strip()
+    password = body.get("password") or ""
+    clone_mac = bool(body.get("clone_mac"))
+    mac = (body.get("mac") or "").strip()
+
+    if not ssid:
+        return jsonify({"ok": False, "error": "SSID is required"}), 400
+    if clone_mac and not _MAC_RE.match(mac):
+        return jsonify({"ok": False, "error": "Invalid MAC address"}), 400
+
+    result = wifi_connect(ssid, password, clone_mac, mac)
+    result["status"] = get_wifi_status()
+    return jsonify(result), (200 if result.get("ok") else 502)
 
 
 @app.route("/history")

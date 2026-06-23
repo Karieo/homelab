@@ -31,6 +31,18 @@ sed -e "s|/home/clay|${HOME}|g" -e "s|User=clay|User=${USER}|" \
     "${SCRIPT_DIR}/systemd/dashboard-agent.service" \
     | sudo tee /etc/systemd/system/dashboard-agent.service > /dev/null
 
+# WiFi setup panel: if this node has a wireless interface and nmcli, let the
+# agent run nmcli via passwordless sudo so the dashboard can connect wlan0.
+WIFI_IFACE="${WIFI_IFACE:-wlan0}"
+NMCLI="$(command -v nmcli || true)"
+if [ -e "/sys/class/net/${WIFI_IFACE}" ] && [ -n "$NMCLI" ]; then
+  echo "==> ${WIFI_IFACE} present — enabling WiFi panel (sudoers for nmcli)"
+  SUDOERS="/etc/sudoers.d/dashboard-nmcli"
+  echo "${USER} ALL=(root) NOPASSWD: ${NMCLI}" | sudo tee "$SUDOERS" > /dev/null
+  sudo chmod 0440 "$SUDOERS"
+  sudo visudo -cf "$SUDOERS"   # validate; aborts on a malformed rule
+fi
+
 sudo systemctl daemon-reload
 sudo systemctl enable dashboard-agent
 sudo systemctl restart dashboard-agent

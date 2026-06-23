@@ -63,8 +63,12 @@ _DISCORD_COLORS = {"high": 0xE74C3C, "default": 0x2ECC71}
 state = {}
 
 
+# Discord (Cloudflare) 403s the default "Python-urllib" User-Agent, so set one.
+_UA = "homelab-ops-alerter/1.0"
+
+
 def _send_ntfy(title, message, priority, tags):
-    headers = {"Title": title, "Priority": priority}
+    headers = {"Title": title, "Priority": priority, "User-Agent": _UA}
     if tags:
         headers["Tags"] = tags
     if NTFY_TOKEN:
@@ -86,7 +90,7 @@ def _send_discord(title, message, priority):
     req = urllib.request.Request(
         DISCORD_WEBHOOK_URL,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": _UA},
     )
     urllib.request.urlopen(req, timeout=10)
 

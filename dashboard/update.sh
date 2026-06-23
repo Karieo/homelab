@@ -38,7 +38,8 @@ notify_deploy() {
     local payload
     payload="$(python3 -c 'import json,sys; print(json.dumps({"embeds":[{"title":sys.argv[1]+" deploy","description":sys.argv[2],"color":int(sys.argv[3])}]}))' \
       "$host" "$message" "$color")"
-    curl -fsS -m 10 -H "Content-Type: application/json" -d "$payload" \
+    curl -fsS -m 10 -A "homelab-ops-updater/1.0" \
+      -H "Content-Type: application/json" -d "$payload" \
       "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1 || echo "discord notify failed" >&2
   fi
   if [ -n "${NTFY_URL:-}" ]; then

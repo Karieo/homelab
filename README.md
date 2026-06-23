@@ -78,6 +78,9 @@ Notes:
   config committed to the repo. Secrets stay in the systemd unit env, not in files.
 - `git pull` must work non-interactively on the node (stored credential helper, a
   PAT, or an SSH remote). Test once with `cd ~/homelab && git pull`.
+- The clone is expected at `~/homelab`; override with `DASHBOARD_REPO=/path` (env in
+  the unit) if yours lives elsewhere. The staged `~/dashboard/update.sh` locates the
+  repo via this, not its own path, and re-stages itself each run.
 - A scoped sudoers drop-in lets the timer restart only the three `dashboard-*`
   units without a password; everything else runs as your user.
 - Logs: `journalctl -u dashboard-update.service -f` ·

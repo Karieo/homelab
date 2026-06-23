@@ -82,6 +82,25 @@ Notes:
   units without a password; everything else runs as your user.
 - Logs: `journalctl -u dashboard-update.service -f` ·
   next run: `systemctl list-timers dashboard-update.timer`.
+- **Deploy pings:** if a notification channel is configured (see below), each
+  successful deploy posts `<host> deploy — updated <old> → <new> — <commit>` to
+  Discord/ntfy (green), and a fast-forward failure posts a red alert.
+
+#### Shared notification config (`notify.env`)
+
+The alerter and the auto-updater both read an optional `~/dashboard/notify.env`
+(gitignored) so you configure the channel once:
+
+```bash
+cat > ~/dashboard/notify.env <<'EOF'
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx/yyy
+# NTFY_URL=https://ntfy.sh/your-homelab-topic
+EOF
+sudo systemctl restart dashboard-alerter dashboard-update.timer
+```
+
+Both units pull it in via `EnvironmentFile=-`, and `update.sh` also sources it for
+manual runs. (Inline `Environment=` lines in a unit still work and override it.)
 
 ### Extra disks
 
@@ -157,6 +176,40 @@ Environment=PIHOLE_PASSWORD=your-pihole-password
 ```
 
 The host is selected via the `PIHOLE` map in `agent.py` (defaults to `scout`).
+
+### WiFi setup panel
+
+On any node with a wireless interface (`wlan0`), the dashboard shows a **WiFi
+Setup** panel with two modes:
+
+- **Client** — connect `wlan0` to a network. Fields: SSID, optional **Username**
+  (for WPA-Enterprise / 802.1x, PEAP+MSCHAPv2), Password, and a "Clone MAC"
+  checkbox (pre-filled with `80:B9:89:90:7C:CA`). `POST /wifi/connect`.
+- **Repeater** (travel router) — join an upstream WiFi on `wlan0` and re-broadcast
+  it as your own private network on a second radio (`wlan1`, typically a USB
+  adapter) with NAT. Downstream devices sit behind the AP, so they never hit the
+  upstream's captive portal once the upstream is up. Fields: upstream SSID /
+  username / password + Clone MAC, and broadcast SSID / password (8-63 chars).
+  `POST /wifi/repeater`, with `POST /wifi/stop` to drop the AP.
+
+The panel shows live status for both radios (client SSID · IP · signal, and AP
+SSID · client count). `GET /wifi/status` returns the same. Interfaces are
+configurable via `WIFI_IFACE` / `WIFI_AP_IFACE`.
+
+The agent runs `nmcli` (and `iw`) via passwordless sudo. `install-agent.sh` sets
+up the scoped sudoers drop-in automatically when `wlan0` + `nmcli` are present. For
+a node that's already installed (auto-update only copies files), add it once:
+
+```bash
+echo "$USER ALL=(root) NOPASSWD: $(command -v nmcli), $(command -v iw)" \
+  | sudo tee /etc/sudoers.d/dashboard-nmcli && sudo chmod 0440 /etc/sudoers.d/dashboard-nmcli
+sudo systemctl restart dashboard-agent
+```
+
+> ⚠️ **Security:** these endpoints are unauthenticated (like the rest of the
+> dashboard) and reconfigure the node's networking. Intended for Tailscale-only
+> access. Credentials are passed to `nmcli` as argv (no shell injection), but a
+> PSK/password is briefly visible in the node's process list while connecting.
 
 ### Deploy
 

@@ -8,3 +8,5 @@ Type=oneshot
 ExecStart=/home/clay/dashboard/update.sh
 WorkingDirectory=/home/clay/dashboard
 User=clay
+# Optional: announce deploys to Discord/ntfy. Shared with the alerter.
+EnvironmentFile=-/home/clay/dashboard/notify.env

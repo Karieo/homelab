@@ -130,8 +130,12 @@ _pihole_lock = threading.Lock()
 _net_lock = threading.Lock()
 _net_last = {"ts": None, "rx": 0, "tx": 0}
 
-# Wireless interface managed by the WiFi setup panel (NetworkManager).
+# Wireless interfaces managed by the WiFi setup panel (NetworkManager).
+# WIFI_IFACE is the upstream/client radio; WIFI_AP_IFACE is the radio used
+# to re-broadcast (repeater/travel-router mode) — typically a USB adapter.
 WIFI_IFACE = os.environ.get("WIFI_IFACE", "wlan0")
+WIFI_AP_IFACE = os.environ.get("WIFI_AP_IFACE", "wlan1")
+AP_CON_NAME = "dashboard-repeater-ap"
 _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 
@@ -597,15 +601,57 @@ def get_wifi_status(iface=None):
                 break
     except Exception:
         pass
+    # Repeater AP status, when a second radio is present.
+    if has_iface(WIFI_AP_IFACE):
+        info["ap"] = get_ap_status()
     return info
 
 
-def wifi_connect(ssid, password, clone_mac, mac, iface=None):
-    """Create/refresh an nmcli wifi profile and bring it up on `iface`.
+def get_ap_status(iface=None):
+    """Return the broadcast (AP) radio's state and connected-client count."""
+    iface = iface or WIFI_AP_IFACE
+    info = {"iface": iface, "active": False, "ssid": None, "clients": None}
+    if not has_iface(iface):
+        return info
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "GENERAL.CONNECTION", "device", "show", iface],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("GENERAL.CONNECTION:"):
+                con = line.split(":", 1)[1].strip()
+                if con and con != "--":
+                    info["active"] = True
+                    # Resolve the broadcast SSID from the profile.
+                    s = subprocess.run(
+                        ["nmcli", "-g", "802-11-wireless.ssid", "connection",
+                         "show", con],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    info["ssid"] = s.stdout.strip() or con
+    except Exception:
+        return info
+    # Associated client count via iw (best-effort; needs root).
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "iw", "dev", iface, "station", "dump"],
+            capture_output=True, text=True, timeout=10,
+        )
+        info["clients"] = sum(
+            1 for ln in result.stdout.splitlines() if ln.startswith("Station")
+        )
+    except Exception:
+        pass
+    return info
 
-    Runs nmcli via sudo (see the dashboard-nmcli sudoers drop-in). All
-    values are passed as argv (never a shell string), so SSID/password
-    can't inject commands.
+
+def wifi_connect(ssid, password, clone_mac, mac, iface=None, username=""):
+    """Create/refresh an nmcli wifi client profile and bring it up.
+
+    Supports WPA-PSK (password) and WPA-Enterprise (username + password,
+    PEAP/MSCHAPv2). Runs nmcli via sudo; all values are passed as argv
+    (never a shell string), so SSID/credentials can't inject commands.
     """
     iface = iface or WIFI_IFACE
     con = ssid
@@ -620,7 +666,16 @@ def wifi_connect(ssid, password, clone_mac, mac, iface=None):
         "sudo", "-n", "nmcli", "connection", "add", "type", "wifi",
         "ifname", iface, "con-name", con, "ssid", ssid,
     ]
-    if password:
+    if username:
+        # WPA-Enterprise (e.g. campus/corporate) — PEAP + MSCHAPv2.
+        add_cmd += [
+            "wifi-sec.key-mgmt", "wpa-eap",
+            "802-1x.eap", "peap", "802-1x.phase2-auth", "mschapv2",
+            "802-1x.identity", username,
+        ]
+        if password:
+            add_cmd += ["802-1x.password", password]
+    elif password:
         add_cmd += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password]
     if clone_mac and mac:
         add_cmd += ["802-11-wireless.cloned-mac-address", mac]
@@ -642,6 +697,63 @@ def wifi_connect(ssid, password, clone_mac, mac, iface=None):
         return {"ok": False, "error": (r2.stderr or r2.stdout).strip()}
 
     return {"ok": True, "message": (r2.stdout or "Connected").strip()}
+
+
+def wifi_start_repeater(up_ssid, up_password, up_username, clone_mac, mac,
+                        ap_ssid, ap_password):
+    """Join an upstream WiFi on WIFI_IFACE and re-broadcast it as a NAT'd
+    access point on WIFI_AP_IFACE (travel-router / repeater).
+
+    Downstream clients sit behind the AP's shared (NAT) network, so they
+    never see the upstream's captive portal once the upstream is up.
+    """
+    up = wifi_connect(up_ssid, up_password, clone_mac, mac,
+                      iface=WIFI_IFACE, username=up_username)
+    if not up.get("ok"):
+        return {"ok": False, "stage": "upstream", "error": up.get("error")}
+
+    if not has_iface(WIFI_AP_IFACE):
+        return {"ok": False, "stage": "ap",
+                "error": f"no AP interface {WIFI_AP_IFACE}"}
+
+    subprocess.run(
+        ["sudo", "-n", "nmcli", "connection", "delete", AP_CON_NAME],
+        capture_output=True, text=True, timeout=20,
+    )
+    add_cmd = [
+        "sudo", "-n", "nmcli", "connection", "add", "type", "wifi",
+        "ifname", WIFI_AP_IFACE, "con-name", AP_CON_NAME, "ssid", ap_ssid,
+        "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
+        "ipv4.method", "shared",
+    ]
+    if ap_password:
+        add_cmd += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", ap_password]
+
+    r = subprocess.run(add_cmd, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return {"ok": False, "stage": "ap", "error": (r.stderr or r.stdout).strip()}
+
+    r2 = subprocess.run(
+        ["sudo", "-n", "nmcli", "connection", "up", AP_CON_NAME],
+        capture_output=True, text=True, timeout=60,
+    )
+    if r2.returncode != 0:
+        subprocess.run(
+            ["sudo", "-n", "nmcli", "connection", "delete", AP_CON_NAME],
+            capture_output=True, text=True, timeout=20,
+        )
+        return {"ok": False, "stage": "ap", "error": (r2.stderr or r2.stdout).strip()}
+
+    return {"ok": True, "message": f"Repeating {up_ssid} → {ap_ssid}"}
+
+
+def wifi_stop_ap():
+    """Bring the repeater AP down (upstream client stays connected)."""
+    subprocess.run(
+        ["sudo", "-n", "nmcli", "connection", "down", AP_CON_NAME],
+        capture_output=True, text=True, timeout=30,
+    )
+    return {"ok": True, "message": "Repeater AP stopped"}
 
 
 def get_uptime():
@@ -735,6 +847,7 @@ def wifi_connect_route():
     body = request.get_json(silent=True) or {}
     ssid = (body.get("ssid") or "").strip()
     password = body.get("password") or ""
+    username = (body.get("username") or "").strip()
     clone_mac = bool(body.get("clone_mac"))
     mac = (body.get("mac") or "").strip()
 
@@ -743,9 +856,50 @@ def wifi_connect_route():
     if clone_mac and not _MAC_RE.match(mac):
         return jsonify({"ok": False, "error": "Invalid MAC address"}), 400
 
-    result = wifi_connect(ssid, password, clone_mac, mac)
+    result = wifi_connect(ssid, password, clone_mac, mac, username=username)
     result["status"] = get_wifi_status()
     return jsonify(result), (200 if result.get("ok") else 502)
+
+
+@app.route("/wifi/repeater", methods=["POST", "OPTIONS"])
+def wifi_repeater_route():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not has_iface(WIFI_IFACE):
+        return jsonify({"ok": False, "error": "no wifi interface"}), 400
+
+    body = request.get_json(silent=True) or {}
+    up_ssid = (body.get("up_ssid") or "").strip()
+    up_password = body.get("up_password") or ""
+    up_username = (body.get("up_username") or "").strip()
+    clone_mac = bool(body.get("clone_mac"))
+    mac = (body.get("mac") or "").strip()
+    ap_ssid = (body.get("ap_ssid") or "").strip()
+    ap_password = body.get("ap_password") or ""
+
+    if not up_ssid:
+        return jsonify({"ok": False, "error": "Upstream SSID is required"}), 400
+    if not ap_ssid:
+        return jsonify({"ok": False, "error": "Broadcast SSID is required"}), 400
+    if clone_mac and not _MAC_RE.match(mac):
+        return jsonify({"ok": False, "error": "Invalid MAC address"}), 400
+    if ap_password and not (8 <= len(ap_password) <= 63):
+        return jsonify({"ok": False,
+                        "error": "Broadcast password must be 8-63 characters"}), 400
+
+    result = wifi_start_repeater(up_ssid, up_password, up_username, clone_mac,
+                                 mac, ap_ssid, ap_password)
+    result["status"] = get_wifi_status()
+    return jsonify(result), (200 if result.get("ok") else 502)
+
+
+@app.route("/wifi/stop", methods=["POST", "OPTIONS"])
+def wifi_stop_route():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    result = wifi_stop_ap()
+    result["status"] = get_wifi_status()
+    return jsonify(result)
 
 
 @app.route("/history")

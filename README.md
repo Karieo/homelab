@@ -180,26 +180,36 @@ The host is selected via the `PIHOLE` map in `agent.py` (defaults to `scout`).
 ### WiFi setup panel
 
 On any node with a wireless interface (`wlan0`), the dashboard shows a **WiFi
-Setup** panel: SSID, password, a "Clone MAC" checkbox (pre-filled with
-`80:B9:89:90:7C:CA`), and a **Connect** button. Submitting it `POST`s to the
-agent's `/wifi/connect`, which runs `nmcli` to (re)create a profile on `wlan0` and
-bring it up; the panel then shows the live connection status (SSID · IP · signal).
-`GET /wifi/status` returns the same status.
+Setup** panel with two modes:
 
-The agent runs `nmcli` via passwordless sudo. `install-agent.sh` sets up the
-scoped sudoers drop-in automatically when `wlan0` + `nmcli` are present. For a node
-that's already installed (auto-update only copies files), add it once:
+- **Client** — connect `wlan0` to a network. Fields: SSID, optional **Username**
+  (for WPA-Enterprise / 802.1x, PEAP+MSCHAPv2), Password, and a "Clone MAC"
+  checkbox (pre-filled with `80:B9:89:90:7C:CA`). `POST /wifi/connect`.
+- **Repeater** (travel router) — join an upstream WiFi on `wlan0` and re-broadcast
+  it as your own private network on a second radio (`wlan1`, typically a USB
+  adapter) with NAT. Downstream devices sit behind the AP, so they never hit the
+  upstream's captive portal once the upstream is up. Fields: upstream SSID /
+  username / password + Clone MAC, and broadcast SSID / password (8-63 chars).
+  `POST /wifi/repeater`, with `POST /wifi/stop` to drop the AP.
+
+The panel shows live status for both radios (client SSID · IP · signal, and AP
+SSID · client count). `GET /wifi/status` returns the same. Interfaces are
+configurable via `WIFI_IFACE` / `WIFI_AP_IFACE`.
+
+The agent runs `nmcli` (and `iw`) via passwordless sudo. `install-agent.sh` sets
+up the scoped sudoers drop-in automatically when `wlan0` + `nmcli` are present. For
+a node that's already installed (auto-update only copies files), add it once:
 
 ```bash
-echo "$USER ALL=(root) NOPASSWD: $(command -v nmcli)" \
+echo "$USER ALL=(root) NOPASSWD: $(command -v nmcli), $(command -v iw)" \
   | sudo tee /etc/sudoers.d/dashboard-nmcli && sudo chmod 0440 /etc/sudoers.d/dashboard-nmcli
 sudo systemctl restart dashboard-agent
 ```
 
-> ⚠️ **Security:** this endpoint is unauthenticated (like the rest of the
-> dashboard) and reconfigures the node's WiFi. It's intended for Tailscale-only
-> access. SSID/password are passed to `nmcli` as argv (no shell injection), but the
-> PSK is briefly visible in the node's process list while connecting.
+> ⚠️ **Security:** these endpoints are unauthenticated (like the rest of the
+> dashboard) and reconfigure the node's networking. Intended for Tailscale-only
+> access. Credentials are passed to `nmcli` as argv (no shell injection), but a
+> PSK/password is briefly visible in the node's process list while connecting.
 
 ### Deploy
 

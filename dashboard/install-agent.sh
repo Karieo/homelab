@@ -32,13 +32,17 @@ sed -e "s|/home/clay|${HOME}|g" -e "s|User=clay|User=${USER}|" \
     | sudo tee /etc/systemd/system/dashboard-agent.service > /dev/null
 
 # WiFi setup panel: if this node has a wireless interface and nmcli, let the
-# agent run nmcli via passwordless sudo so the dashboard can connect wlan0.
+# agent run nmcli (and iw, for AP client counts) via passwordless sudo so the
+# dashboard can connect wlan0 / run the repeater.
 WIFI_IFACE="${WIFI_IFACE:-wlan0}"
 NMCLI="$(command -v nmcli || true)"
 if [ -e "/sys/class/net/${WIFI_IFACE}" ] && [ -n "$NMCLI" ]; then
-  echo "==> ${WIFI_IFACE} present — enabling WiFi panel (sudoers for nmcli)"
+  echo "==> ${WIFI_IFACE} present — enabling WiFi panel (sudoers for nmcli/iw)"
+  IW="$(command -v iw || true)"
+  RULE="${NMCLI}"
+  [ -n "$IW" ] && RULE="${NMCLI}, ${IW}"
   SUDOERS="/etc/sudoers.d/dashboard-nmcli"
-  echo "${USER} ALL=(root) NOPASSWD: ${NMCLI}" | sudo tee "$SUDOERS" > /dev/null
+  echo "${USER} ALL=(root) NOPASSWD: ${RULE}" | sudo tee "$SUDOERS" > /dev/null
   sudo chmod 0440 "$SUDOERS"
   sudo visudo -cf "$SUDOERS"   # validate; aborts on a malformed rule
 fi

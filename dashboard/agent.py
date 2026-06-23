@@ -59,7 +59,7 @@ KNOWN_PORTS = {
     "open-webui": 3002,
     "ollama": 11434,
     "pihole": 80,
-    "kiwix": 8080,
+    "kiwix": 8090,
 }
 
 # Native (non-Docker) services to report per host, checked via
@@ -70,7 +70,7 @@ KNOWN_PORTS = {
 EXTRA_SERVICES = {
     "scout": [
         {"name": "pihole", "unit": "pihole-FTL.service", "port": 80},
-        {"name": "kiwix", "unit": "kiwix.service", "port": 8080},
+        {"name": "kiwix", "unit": "kiwix.service", "port": 8090},
     ],
 }
 

@@ -907,9 +907,9 @@
         <form id="wifi-rpt-form" class="wifi-mode" data-mode="repeater" autocomplete="off" hidden>
           <label class="wifi-check wifi-keep">
             <input id="rpt-keep" type="checkbox" checked />
-            <span>Keep current wlan0 connection (recommended)</span></label>
+            <span>Keep current upstream connection (recommended)</span></label>
           <div id="rpt-upstream" hidden>
-            <div class="wifi-sub">UPSTREAM (wlan0 — the network to repeat)</div>
+            <div class="wifi-sub">UPSTREAM — the network to repeat</div>
             <label class="wifi-field"><span>SSID</span>
               <input id="rpt-up-ssid" type="text" placeholder="upstream network" /></label>
             <label class="wifi-field"><span>USERNAME <em>(enterprise, optional)</em></span>
@@ -921,7 +921,7 @@
               <span>Clone MAC</span>
               <input id="rpt-mac" type="text" value="${DEFAULT_MAC}" /></label>
           </div>
-          <div class="wifi-sub">BROADCAST (wlan1 — your private network)</div>
+          <div class="wifi-sub">BROADCAST — your private network</div>
           <label class="wifi-field"><span>SSID</span>
             <input id="rpt-ap-ssid" type="text" placeholder="name to broadcast" /></label>
           <label class="wifi-field"><span>PASSWORD <em>(8-63 chars)</em></span>

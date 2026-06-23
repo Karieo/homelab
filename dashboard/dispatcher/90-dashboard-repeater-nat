@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# NetworkManager dispatcher hook: make the repeater AP's clients reach the
+# internet on hosts where ufw / Docker / Tailscale manage the firewall.
+#
+# NetworkManager's `ipv4.method=shared` is supposed to add the NAT +
+# forwarding rules, but on a box with ufw (FORWARD policy DROP) and Docker
+# (its own FORWARD chain) those rules don't take effect, so AP clients get
+# an IP but no internet. This hook adds the missing rules whenever the
+# repeater AP connection comes up (including at boot), idempotently.
+#
+# Installed to /etc/NetworkManager/dispatcher.d/ by install-agent.sh and
+# run as root by NetworkManager — no sudo needed.
+
+IFACE="$1"
+ACTION="$2"
+AP_CON="${REPEATER_AP_CON:-dashboard-repeater-ap}"
+AP_SUBNET="${REPEATER_AP_SUBNET:-10.42.0.0/24}"
+
+# Only act when our AP connection is brought up.
+[ "$ACTION" = "up" ] || exit 0
+[ "$CONNECTION_ID" = "$AP_CON" ] || exit 0
+
+# NAT: masquerade AP-subnet traffic heading out any non-AP interface.
+iptables -t nat -C POSTROUTING -s "$AP_SUBNET" ! -o "$IFACE" -j MASQUERADE 2>/dev/null \
+  || iptables -t nat -A POSTROUTING -s "$AP_SUBNET" ! -o "$IFACE" -j MASQUERADE
+
+# Forwarding: accept the AP subnet ahead of ufw/Docker's DROP. DOCKER-USER is
+# traversed early in FORWARD; an ACCEPT here wins. Fall back to FORWARD if the
+# Docker chain isn't present.
+if iptables -L DOCKER-USER -n >/dev/null 2>&1; then
+  CHAIN="DOCKER-USER"
+else
+  CHAIN="FORWARD"
+fi
+iptables -C "$CHAIN" -s "$AP_SUBNET" -j ACCEPT 2>/dev/null || iptables -I "$CHAIN" -s "$AP_SUBNET" -j ACCEPT
+iptables -C "$CHAIN" -d "$AP_SUBNET" -j ACCEPT 2>/dev/null || iptables -I "$CHAIN" -d "$AP_SUBNET" -j ACCEPT
+
+# Ensure forwarding is on.
+[ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ] || \
+  echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+
+exit 0

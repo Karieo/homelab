@@ -205,7 +205,23 @@ Setup** panel with two modes:
 
 The panel shows live status for both radios (client SSID · IP · signal, and AP
 SSID · client count). `GET /wifi/status` returns the same. Interfaces are
-configurable via `WIFI_IFACE` / `WIFI_AP_IFACE`.
+configurable via `WIFI_IFACE` (upstream/client) and `WIFI_AP_IFACE` (broadcast).
+
+> 📡 **Choosing radios:** the broadcast (`WIFI_AP_IFACE`) radio must support AP
+> mode with WPA2. The Raspberry Pi's **built-in** (Broadcom `brcmfmac`) radio is
+> reliable as an AP; many cheap USB dongles are **not** — notably the **RTL8821AU**
+> (e.g. TP-Link Archer T2U Plus) beacons but fails client association in AP mode.
+> If the AP shows up but devices can't join (or get "incorrect password" with the
+> right password), use the built-in radio for the AP and the USB adapter as the
+> upstream client — e.g. set `WIFI_IFACE=wlan1`, `WIFI_AP_IFACE=wlan0`. Adapters
+> with MediaTek `mt7612u`/`mt7610u` chipsets make good APs.
+
+> 🌐 **Repeater NAT on Docker/ufw hosts:** NetworkManager's shared-mode NAT can be
+> overridden by ufw (FORWARD policy `DROP`) and Docker's firewall, leaving AP
+> clients with an IP but no internet. `install-agent.sh` installs a NetworkManager
+> dispatcher hook (`/etc/NetworkManager/dispatcher.d/90-dashboard-repeater-nat`)
+> that adds the masquerade + forward rules for the AP subnet (`10.42.0.0/24`)
+> whenever the AP comes up — including at boot.
 
 The agent runs `nmcli` (and `iw`) via passwordless sudo. `install-agent.sh` sets
 up the scoped sudoers drop-in automatically when `wlan0` + `nmcli` are present. For

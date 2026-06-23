@@ -727,7 +727,18 @@ def wifi_start_repeater(up_ssid, up_password, up_username, clone_mac, mac,
         "ipv4.method", "shared",
     ]
     if ap_password:
-        add_cmd += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", ap_password]
+        # Pin a clean WPA2-PSK config (RSN + CCMP, PMF off). This is the
+        # most broadly compatible AP setup; NetworkManager's defaults can
+        # negotiate mixed proto/cipher or 802.11w (PMF), which many clients
+        # (notably iOS) reject mid-handshake and report as a wrong password.
+        add_cmd += [
+            "wifi-sec.key-mgmt", "wpa-psk",
+            "wifi-sec.proto", "rsn",
+            "wifi-sec.pairwise", "ccmp",
+            "wifi-sec.group", "ccmp",
+            "wifi-sec.pmf", "1",
+            "wifi-sec.psk", ap_password,
+        ]
 
     r = subprocess.run(add_cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:

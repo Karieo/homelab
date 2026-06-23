@@ -188,12 +188,20 @@ Setup** panel with two modes:
 - **Client** — connect `wlan0` to a network. Fields: SSID, optional **Username**
   (for WPA-Enterprise / 802.1x, PEAP+MSCHAPv2), Password, and a "Clone MAC"
   checkbox (pre-filled with `80:B9:89:90:7C:CA`). `POST /wifi/connect`.
-- **Repeater** (travel router) — join an upstream WiFi on `wlan0` and re-broadcast
-  it as your own private network on a second radio (`wlan1`, typically a USB
-  adapter) with NAT. Downstream devices sit behind the AP, so they never hit the
-  upstream's captive portal once the upstream is up. Fields: upstream SSID /
-  username / password + Clone MAC, and broadcast SSID / password (8-63 chars).
-  `POST /wifi/repeater`, with `POST /wifi/stop` to drop the AP.
+- **Repeater** (travel router) — re-broadcast `wlan0`'s connection as your own
+  private network on a second radio (`wlan1`, typically a USB adapter) with NAT.
+  Downstream devices sit behind the AP, so they never hit the upstream's captive
+  portal. **"Keep current wlan0 connection" is on by default** (recommended): the
+  repeater leaves `wlan0` untouched and only brings up the `wlan1` AP — ideal when
+  `wlan0` is already on the network you want to repeat. Untick it to (re)connect
+  `wlan0` to a different upstream first (SSID / username / password + Clone MAC).
+  Broadcast SSID / password (8-63 chars). `POST /wifi/repeater`, `POST /wifi/stop`.
+
+> 🛡️ **Lockout guard:** the agent **refuses to reconfigure `wlan0` when it's the
+> node's only network path** (sole default route) — that would cut off remote
+> access. Connect Ethernet first, use the repeater's "keep current connection"
+> mode, or pass `force=true`. (`POST /wifi/connect` and reconfiguring-upstream
+> repeater calls return `409` with `needs_force` in that case.)
 
 The panel shows live status for both radios (client SSID · IP · signal, and AP
 SSID · client count). `GET /wifi/status` returns the same. Interfaces are

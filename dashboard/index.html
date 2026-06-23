@@ -905,17 +905,22 @@
         </form>
 
         <form id="wifi-rpt-form" class="wifi-mode" data-mode="repeater" autocomplete="off" hidden>
-          <div class="wifi-sub">UPSTREAM (wlan0 — the network to repeat)</div>
-          <label class="wifi-field"><span>SSID</span>
-            <input id="rpt-up-ssid" type="text" placeholder="upstream network" /></label>
-          <label class="wifi-field"><span>USERNAME <em>(enterprise, optional)</em></span>
-            <input id="rpt-up-user" type="text" placeholder="leave blank for normal WPA" /></label>
-          <label class="wifi-field"><span>PASSWORD</span>
-            <input id="rpt-up-pass" type="password" placeholder="upstream password" /></label>
-          <label class="wifi-check">
-            <input id="rpt-clone" type="checkbox" checked />
-            <span>Clone MAC</span>
-            <input id="rpt-mac" type="text" value="${DEFAULT_MAC}" /></label>
+          <label class="wifi-check wifi-keep">
+            <input id="rpt-keep" type="checkbox" checked />
+            <span>Keep current wlan0 connection (recommended)</span></label>
+          <div id="rpt-upstream" hidden>
+            <div class="wifi-sub">UPSTREAM (wlan0 — the network to repeat)</div>
+            <label class="wifi-field"><span>SSID</span>
+              <input id="rpt-up-ssid" type="text" placeholder="upstream network" /></label>
+            <label class="wifi-field"><span>USERNAME <em>(enterprise, optional)</em></span>
+              <input id="rpt-up-user" type="text" placeholder="leave blank for normal WPA" /></label>
+            <label class="wifi-field"><span>PASSWORD</span>
+              <input id="rpt-up-pass" type="password" placeholder="upstream password" /></label>
+            <label class="wifi-check">
+              <input id="rpt-clone" type="checkbox" checked />
+              <span>Clone MAC</span>
+              <input id="rpt-mac" type="text" value="${DEFAULT_MAC}" /></label>
+          </div>
           <div class="wifi-sub">BROADCAST (wlan1 — your private network)</div>
           <label class="wifi-field"><span>SSID</span>
             <input id="rpt-ap-ssid" type="text" placeholder="name to broadcast" /></label>
@@ -941,6 +946,12 @@
       const cb = document.getElementById(c), inp = document.getElementById(m);
       cb.addEventListener("change", () => { inp.disabled = !cb.checked; });
     });
+    // Show the upstream fields only when NOT keeping the current connection.
+    const keep = document.getElementById("rpt-keep");
+    const upstream = document.getElementById("rpt-upstream");
+    const syncKeep = () => { upstream.hidden = keep.checked; };
+    keep.addEventListener("change", syncKeep);
+    syncKeep();
   }
 
   function setWifiMode(mode) {
@@ -1040,15 +1051,17 @@
     e.preventDefault();
     const el = document.getElementById("wifi");
     const out = document.getElementById("wifi-rpt-result");
+    const keep = document.getElementById("rpt-keep").checked;
     const upSsid = document.getElementById("rpt-up-ssid").value.trim();
     const apSsid = document.getElementById("rpt-ap-ssid").value.trim();
     const apPass = document.getElementById("rpt-ap-pass").value;
-    if (!upSsid) { out.className = "wifi-result err"; out.textContent = "Upstream SSID is required"; return; }
+    if (!keep && !upSsid) { out.className = "wifi-result err"; out.textContent = "Upstream SSID is required"; return; }
     if (!apSsid) { out.className = "wifi-result err"; out.textContent = "Broadcast SSID is required"; return; }
     if (apPass && (apPass.length < 8 || apPass.length > 63)) {
       out.className = "wifi-result err"; out.textContent = "Broadcast password must be 8-63 characters"; return;
     }
     await wifiPost(el.dataset.repeaterUrl, {
+      keep_upstream: keep,
       up_ssid: upSsid,
       up_username: document.getElementById("rpt-up-user").value.trim(),
       up_password: document.getElementById("rpt-up-pass").value,

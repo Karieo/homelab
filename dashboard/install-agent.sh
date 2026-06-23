@@ -45,6 +45,16 @@ if [ -e "/sys/class/net/${WIFI_IFACE}" ] && [ -n "$NMCLI" ]; then
   echo "${USER} ALL=(root) NOPASSWD: ${RULE}" | sudo tee "$SUDOERS" > /dev/null
   sudo chmod 0440 "$SUDOERS"
   sudo visudo -cf "$SUDOERS"   # validate; aborts on a malformed rule
+
+  # NAT hook so repeater AP clients reach the internet even with ufw/Docker
+  # managing the firewall (NetworkManager's shared NAT alone doesn't stick).
+  if [ -d /etc/NetworkManager/dispatcher.d ]; then
+    echo "==> Installing repeater NAT dispatcher hook"
+    sudo cp "${SCRIPT_DIR}/dispatcher/90-dashboard-repeater-nat" \
+      /etc/NetworkManager/dispatcher.d/90-dashboard-repeater-nat
+    sudo chown root:root /etc/NetworkManager/dispatcher.d/90-dashboard-repeater-nat
+    sudo chmod 0755 /etc/NetworkManager/dispatcher.d/90-dashboard-repeater-nat
+  fi
 fi
 
 sudo systemctl daemon-reload

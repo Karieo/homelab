@@ -188,12 +188,20 @@ Setup** panel with two modes:
 - **Client** — connect `wlan0` to a network. Fields: SSID, optional **Username**
   (for WPA-Enterprise / 802.1x, PEAP+MSCHAPv2), Password, and a "Clone MAC"
   checkbox (pre-filled with `80:B9:89:90:7C:CA`). `POST /wifi/connect`.
-- **Repeater** (travel router) — join an upstream WiFi on `wlan0` and re-broadcast
-  it as your own private network on a second radio (`wlan1`, typically a USB
-  adapter) with NAT. Downstream devices sit behind the AP, so they never hit the
-  upstream's captive portal once the upstream is up. Fields: upstream SSID /
-  username / password + Clone MAC, and broadcast SSID / password (8-63 chars).
-  `POST /wifi/repeater`, with `POST /wifi/stop` to drop the AP.
+- **Repeater** (travel router) — re-broadcast `wlan0`'s connection as your own
+  private network on a second radio (`wlan1`, typically a USB adapter) with NAT.
+  Downstream devices sit behind the AP, so they never hit the upstream's captive
+  portal. **"Keep current wlan0 connection" is on by default** (recommended): the
+  repeater leaves `wlan0` untouched and only brings up the `wlan1` AP — ideal when
+  `wlan0` is already on the network you want to repeat. Untick it to (re)connect
+  `wlan0` to a different upstream first (SSID / username / password + Clone MAC).
+  Broadcast SSID / password (8-63 chars). `POST /wifi/repeater`, `POST /wifi/stop`.
+
+> 🛡️ **Lockout guard:** the agent **refuses to reconfigure `wlan0` when it's the
+> node's only network path** (sole default route) — that would cut off remote
+> access. Connect Ethernet first, use the repeater's "keep current connection"
+> mode, or pass `force=true`. (`POST /wifi/connect` and reconfiguring-upstream
+> repeater calls return `409` with `needs_force` in that case.)
 
 The panel shows live status for both radios (client SSID · IP · signal, and AP
 SSID · client count). `GET /wifi/status` returns the same. Interfaces are
@@ -213,6 +221,35 @@ sudo systemctl restart dashboard-agent
 > dashboard) and reconfigure the node's networking. Intended for Tailscale-only
 > access. Credentials are passed to `nmcli` as argv (no shell injection), but a
 > PSK/password is briefly visible in the node's process list while connecting.
+
+#### Troubleshooting the repeater
+
+- **Client says "Incorrect password" but the password is right.** Usually a
+  handshake/security mismatch, not the password. The AP is pinned to WPA2-PSK
+  (RSN/CCMP, PMF off) for compatibility; if a client still fails, check the
+  adapter actually supports AP mode (`iw list | grep -A8 "interface modes"`).
+- **AP activates then drops; `journalctl -u NetworkManager` shows
+  `dnsmasq … failed to bind … Address already in use` / `FAILED to start up`.**
+  Repeater mode uses NetworkManager's `ipv4.method=shared`, which runs its own
+  dnsmasq for DHCP/DNS on the AP interface. If another DHCP/DNS server already
+  binds those ports it collides and the AP won't come up. Find the holder:
+  ```bash
+  sudo ss -ulnp | grep -E ':53|:67'
+  ```
+  - A **standalone `dnsmasq.service`** bound to `wlan1`/`:67` is the usual cause
+    (e.g. a hand-rolled DHCP setup). If you don't need it, let NetworkManager own
+    the AP: `sudo systemctl disable --now dnsmasq`, then re-Start the repeater.
+  - **Pi-hole** (`pihole-FTL`) on `0.0.0.0:53` coexists fine — NM binds DNS to the
+    AP gateway (`10.42.0.1:53`) specifically. If you do hit a `:53` clash, add a
+    drop-in so NM does DHCP only and hands clients Pi-hole for DNS:
+    ```
+    # /etc/NetworkManager/dnsmasq-shared.d/00-repeater.conf
+    port=0                      # no DNS in NM's shared dnsmasq → no :53 clash
+    dhcp-option=6,<pihole-ip>   # AP clients use Pi-hole (keeps ad-blocking)
+    ```
+- **Verify it's up:** `nmcli -t -f NAME,DEVICE,STATE connection show --active`
+  should list `dashboard-repeater-ap:wlan1:activated`, and `ss -ulnp` should show
+  NM's dnsmasq on `10.42.0.1:53` + `:67`. Clients get `10.42.0.x` via NAT.
 
 ### Deploy
 

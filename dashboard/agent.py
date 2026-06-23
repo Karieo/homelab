@@ -561,6 +561,33 @@ def has_iface(iface):
     return os.path.exists(f"/sys/class/net/{iface}")
 
 
+def default_route_ifaces():
+    """Set of interfaces that currently carry a default route."""
+    ifaces = set()
+    try:
+        result = subprocess.run(
+            ["ip", "-o", "route", "show", "default"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if "dev" in parts:
+                ifaces.add(parts[parts.index("dev") + 1])
+    except Exception:
+        pass
+    return ifaces
+
+
+def is_sole_uplink(iface):
+    """True if `iface` is scout's *only* path to the network (default route).
+
+    Reconfiguring such an interface would cut off remote management, so the
+    WiFi endpoints refuse to touch it unless explicitly forced.
+    """
+    routes = default_route_ifaces()
+    return routes == {iface}
+
+
 def get_wifi_status(iface=None):
     """Return the wireless interface's current connection state."""
     iface = iface or WIFI_IFACE
@@ -700,17 +727,30 @@ def wifi_connect(ssid, password, clone_mac, mac, iface=None, username=""):
 
 
 def wifi_start_repeater(up_ssid, up_password, up_username, clone_mac, mac,
-                        ap_ssid, ap_password):
-    """Join an upstream WiFi on WIFI_IFACE and re-broadcast it as a NAT'd
-    access point on WIFI_AP_IFACE (travel-router / repeater).
+                        ap_ssid, ap_password, keep_upstream=False):
+    """Re-broadcast WIFI_IFACE's connection as a NAT'd access point on
+    WIFI_AP_IFACE (travel-router / repeater).
 
-    Downstream clients sit behind the AP's shared (NAT) network, so they
-    never see the upstream's captive portal once the upstream is up.
+    With keep_upstream=True the existing WIFI_IFACE connection is left
+    untouched (it just needs to be online) and only the AP is brought up —
+    this is the safe default when WIFI_IFACE is already on the network you
+    want to repeat (and avoids ever cutting scout's own uplink). Otherwise
+    WIFI_IFACE is (re)connected to the given upstream first.
     """
-    up = wifi_connect(up_ssid, up_password, clone_mac, mac,
-                      iface=WIFI_IFACE, username=up_username)
-    if not up.get("ok"):
-        return {"ok": False, "stage": "upstream", "error": up.get("error")}
+    if keep_upstream:
+        status = get_wifi_status(WIFI_IFACE)
+        if not status.get("connected"):
+            return {"ok": False, "stage": "upstream",
+                    "error": f"{WIFI_IFACE} isn't connected to anything to "
+                             f"repeat — connect it first or uncheck "
+                             f"'keep current connection'."}
+        up_label = status.get("ssid") or WIFI_IFACE
+    else:
+        up = wifi_connect(up_ssid, up_password, clone_mac, mac,
+                          iface=WIFI_IFACE, username=up_username)
+        if not up.get("ok"):
+            return {"ok": False, "stage": "upstream", "error": up.get("error")}
+        up_label = up_ssid
 
     if not has_iface(WIFI_AP_IFACE):
         return {"ok": False, "stage": "ap",
@@ -755,7 +795,7 @@ def wifi_start_repeater(up_ssid, up_password, up_username, clone_mac, mac,
         )
         return {"ok": False, "stage": "ap", "error": (r2.stderr or r2.stdout).strip()}
 
-    return {"ok": True, "message": f"Repeating {up_ssid} → {ap_ssid}"}
+    return {"ok": True, "message": f"Repeating {up_label} → {ap_ssid}"}
 
 
 def wifi_stop_ap():
@@ -861,11 +901,19 @@ def wifi_connect_route():
     username = (body.get("username") or "").strip()
     clone_mac = bool(body.get("clone_mac"))
     mac = (body.get("mac") or "").strip()
+    force = bool(body.get("force"))
 
     if not ssid:
         return jsonify({"ok": False, "error": "SSID is required"}), 400
     if clone_mac and not _MAC_RE.match(mac):
         return jsonify({"ok": False, "error": "Invalid MAC address"}), 400
+    if is_sole_uplink(WIFI_IFACE) and not force:
+        return jsonify({
+            "ok": False, "needs_force": True,
+            "error": f"{WIFI_IFACE} is this node's only network connection — "
+                     f"reconfiguring it would cut off access. Connect Ethernet "
+                     f"first, or resend with force=true.",
+        }), 409
 
     result = wifi_connect(ssid, password, clone_mac, mac, username=username)
     result["status"] = get_wifi_status()
@@ -887,19 +935,32 @@ def wifi_repeater_route():
     mac = (body.get("mac") or "").strip()
     ap_ssid = (body.get("ap_ssid") or "").strip()
     ap_password = body.get("ap_password") or ""
+    keep_upstream = bool(body.get("keep_upstream"))
+    force = bool(body.get("force"))
 
-    if not up_ssid:
-        return jsonify({"ok": False, "error": "Upstream SSID is required"}), 400
     if not ap_ssid:
         return jsonify({"ok": False, "error": "Broadcast SSID is required"}), 400
-    if clone_mac and not _MAC_RE.match(mac):
-        return jsonify({"ok": False, "error": "Invalid MAC address"}), 400
     if ap_password and not (8 <= len(ap_password) <= 63):
         return jsonify({"ok": False,
                         "error": "Broadcast password must be 8-63 characters"}), 400
+    # Only validate/guard the upstream when we're actually reconfiguring it.
+    if not keep_upstream:
+        if not up_ssid:
+            return jsonify({"ok": False, "error": "Upstream SSID is required"}), 400
+        if clone_mac and not _MAC_RE.match(mac):
+            return jsonify({"ok": False, "error": "Invalid MAC address"}), 400
+        if is_sole_uplink(WIFI_IFACE) and not force:
+            return jsonify({
+                "ok": False, "needs_force": True,
+                "error": f"{WIFI_IFACE} is this node's only network connection — "
+                         f"reconfiguring the upstream would cut off access. Tick "
+                         f"'keep current connection', connect Ethernet, or resend "
+                         f"with force=true.",
+            }), 409
 
     result = wifi_start_repeater(up_ssid, up_password, up_username, clone_mac,
-                                 mac, ap_ssid, ap_password)
+                                 mac, ap_ssid, ap_password,
+                                 keep_upstream=keep_upstream)
     result["status"] = get_wifi_status()
     return jsonify(result), (200 if result.get("ok") else 502)
 

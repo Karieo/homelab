@@ -207,6 +207,14 @@ The panel shows live status for both radios (client SSID · IP · signal, and AP
 SSID · client count). `GET /wifi/status` returns the same. Interfaces are
 configurable via `WIFI_IFACE` (upstream/client) and `WIFI_AP_IFACE` (broadcast).
 
+> 🔐 **Config is on-site only.** The interactive WiFi controls (Client / Repeater)
+> appear **only when the dashboard is opened from the node by raw IP** (on-site
+> mode, e.g. `http://10.42.0.1:9091` on scout's AP). On the networked dashboard
+> (`bastion:9091`) the same panel becomes **read-only** — it lists the devices
+> connected to the node's AP (hostname · IP · signal · uptime, from `iw` + the
+> AP's DHCP leases) but exposes no controls, so you can't reconfigure a remote
+> node's WiFi from the main dashboard by accident.
+
 > 📡 **Choosing radios:** the broadcast (`WIFI_AP_IFACE`) radio must support AP
 > mode with WPA2. The Raspberry Pi's **built-in** (Broadcom `brcmfmac`) radio is
 > reliable as an AP; many cheap USB dongles are **not** — notably the **RTL8821AU**

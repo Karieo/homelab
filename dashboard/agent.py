@@ -634,8 +634,32 @@ def get_wifi_status(iface=None):
     return info
 
 
+def _ap_leases():
+    """Map MAC -> {ip, hostname} from the AP's NetworkManager dnsmasq leases.
+
+    NetworkManager's shared (AP) mode runs a dnsmasq whose leases live at a
+    predictable path. Best-effort: if the file is missing or unreadable we
+    just return what we have (stations still get MAC + signal from `iw`).
+    """
+    path = "/var/lib/NetworkManager/dnsmasq-%s.leases" % AP_CON_NAME
+    leases = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 4:
+                    host = parts[3]
+                    leases[parts[1].lower()] = {
+                        "ip": parts[2],
+                        "hostname": None if host == "*" else host,
+                    }
+    except Exception:
+        pass
+    return leases
+
+
 def get_ap_status(iface=None):
-    """Return the broadcast (AP) radio's state and connected-client count."""
+    """Return the broadcast (AP) radio's state and connected clients."""
     iface = iface or WIFI_AP_IFACE
     info = {"iface": iface, "active": False, "ssid": None, "clients": None}
     if not has_iface(iface):
@@ -659,15 +683,43 @@ def get_ap_status(iface=None):
                     info["ssid"] = s.stdout.strip() or con
     except Exception:
         return info
-    # Associated client count via iw (best-effort; needs root).
+    # Associated clients via iw (best-effort; needs root). Enrich each with
+    # IP/hostname from the AP's DHCP leases so the dashboard can show which
+    # devices are connected, not just a count.
     try:
         result = subprocess.run(
             ["sudo", "-n", "iw", "dev", iface, "station", "dump"],
             capture_output=True, text=True, timeout=10,
         )
-        info["clients"] = sum(
-            1 for ln in result.stdout.splitlines() if ln.startswith("Station")
-        )
+        leases = _ap_leases()
+        stations = []
+        cur = None
+        for ln in result.stdout.splitlines():
+            if ln.startswith("Station"):
+                mac = ln.split()[1].lower()
+                lease = leases.get(mac, {})
+                cur = {
+                    "mac": mac,
+                    "ip": lease.get("ip"),
+                    "hostname": lease.get("hostname"),
+                    "signal_dbm": None,
+                    "connected_seconds": None,
+                }
+                stations.append(cur)
+            elif cur is not None:
+                s = ln.strip()
+                if s.startswith("signal:"):
+                    try:
+                        cur["signal_dbm"] = int(s.split(":", 1)[1].split()[0])
+                    except Exception:
+                        pass
+                elif s.startswith("connected time:"):
+                    try:
+                        cur["connected_seconds"] = int(s.split(":", 1)[1].split()[0])
+                    except Exception:
+                        pass
+        info["clients"] = len(stations)
+        info["stations"] = stations
     except Exception:
         pass
     return info

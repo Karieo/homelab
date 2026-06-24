@@ -216,6 +216,28 @@ configurable via `WIFI_IFACE` (upstream/client) and `WIFI_AP_IFACE` (broadcast).
 > upstream client — e.g. set `WIFI_IFACE=wlan1`, `WIFI_AP_IFACE=wlan0`. Adapters
 > with MediaTek `mt7612u`/`mt7610u` chipsets make good APs.
 
+#### On-site / offline access (no internet, no Tailscale)
+
+The main dashboard lives on `bastion:9091`, but when a travel node (e.g. scout)
+is somewhere new with **no upstream yet**, you can't reach bastion — and you need
+the WiFi panel precisely to *get* online. Two pieces solve this chicken-and-egg:
+
+- **Persistent management AP.** The repeater AP is created with
+  `connection.autoconnect=yes`, so the node always self-broadcasts its AP at boot,
+  independent of any upstream. Join it from your phone and the node is reachable at
+  its AP gateway IP (NetworkManager's shared mode → `http://10.42.0.1`).
+- **Self-hosted UI in offline mode.** Run `./install-dashboard.sh` on the travel
+  node too, then open `http://10.42.0.1:9091`. When the dashboard is served from a
+  **raw IP** (rather than a hostname), it talks only to the *local* agent on the
+  same host, so it works with no internet, Tailscale, or MagicDNS. Use the WiFi
+  panel's Client tab to join the upstream, then the rest of the tailnet comes back.
+
+> 🏨 **Captive-portal upstreams (hotels, airports):** join the open SSID in the
+> Client tab (blank password), then open any plain-`http://` page from a device on
+> the node's AP — the portal intercepts it, and because all traffic is NAT'd out
+> the node's uplink, completing the login authorizes the *node's* MAC. Every device
+> behind it is then online through that single authorized connection.
+
 > 🌐 **Repeater NAT on Docker/ufw hosts:** NetworkManager's shared-mode NAT can be
 > overridden by ufw (FORWARD policy `DROP`) and Docker's firewall, leaving AP
 > clients with an IP but no internet. `install-agent.sh` installs a NetworkManager

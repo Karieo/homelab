@@ -253,6 +253,56 @@ the WiFi panel precisely to *get* online. Two pieces solve this chicken-and-egg:
 > that adds the masquerade + forward rules for the AP subnet (`10.42.0.0/24`)
 > whenever the AP comes up — including at boot.
 
+#### Ad-blocking on the repeated network (Pi-hole as the AP resolver)
+
+To filter DNS for every device on the AP (ScoutAP), Pi-hole must be the resolver
+those clients use. The catch: NetworkManager's shared mode runs its **own**
+dnsmasq on the AP gateway (`10.42.0.1:53`) for DHCP **and** DNS, which grabs port
+53 before Pi-hole's FTL can — FTL then logs `failed to create listening socket
+for port 53: Address already in use` and silently serves nothing, so Pi-hole sees
+zero queries.
+
+The fix is to make NetworkManager's dnsmasq **DHCP-only** and hand clients Pi-hole
+as their DNS, leaving port 53 to FTL. On the AP node (e.g. scout):
+
+```bash
+# 1. AP does DHCP only; advertise Pi-hole (the gateway) as the DNS server.
+sudo tee /etc/NetworkManager/dnsmasq-shared.d/01-pihole.conf >/dev/null <<'EOF'
+port=0
+dhcp-option=option:dns-server,10.42.0.1
+EOF
+
+# 2. Let FTL answer local subnets (AP + loopback). LOCAL binds 0.0.0.0 and
+#    filters by subnet, so it survives reboots and interface changes — unlike
+#    SINGLE/BIND, which need the AP up before FTL starts.
+sudo pihole-FTL --config dns.listeningMode LOCAL
+
+# 3. Reload the AP (frees :53), then start FTL's resolver on it.
+sudo nmcli connection up dashboard-repeater-ap
+sudo systemctl restart pihole-FTL
+
+# 4. Verify: FTL (not dnsmasq) owns :53, and it resolves + blocks.
+sudo ss -tulnp | grep ':53'            # expect pihole-FTL
+nslookup doubleclick.net 127.0.0.1     # expect 0.0.0.0 (blocked)
+nslookup google.com 127.0.0.1          # expect real IPs
+```
+
+This is reboot-proof: the drop-in (`port=0`) is read every time NetworkManager
+respawns its dnsmasq, and FTL binds `0.0.0.0:53` cleanly once the conflict is
+gone. Reconnect clients to the AP (toggle their Wi-Fi) so they pick up the new
+DHCP-advertised DNS, then the Pi-hole query counter starts climbing.
+
+> 🔒 **`LOCAL` vs hotel exposure:** `LOCAL` answers any directly-attached subnet
+> (the AP, loopback — and the upstream/hotel subnet), never the public internet.
+> That's a mild open-resolver exposure on the upstream side. To answer *only* the
+> AP, set `dns.listeningMode SINGLE` + `dns.interface wlan0`, at the cost of FTL
+> needing the AP interface up at start (less robust on reboot). `LOCAL` is the
+> recommended balance for a travel router.
+>
+> Reminder: `pihole -g` (build the blocklist) and `pihole setpassword` both need
+> `sudo`, and the dashboard's Pi-hole widget reads stats via `PIHOLE_PASSWORD`
+> (see the Pi-hole widget section).
+
 The agent runs `nmcli` (and `iw`) via passwordless sudo. `install-agent.sh` sets
 up the scoped sudoers drop-in automatically when `wlan0` + `nmcli` are present. For
 a node that's already installed (auto-update only copies files), add it once:

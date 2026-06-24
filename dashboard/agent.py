@@ -765,6 +765,11 @@ def wifi_start_repeater(up_ssid, up_password, up_username, clone_mac, mac,
         "ifname", WIFI_AP_IFACE, "con-name", AP_CON_NAME, "ssid", ap_ssid,
         "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
         "ipv4.method", "shared",
+        # Persist across reboots so scout always self-hosts this AP at boot,
+        # independent of any upstream — that's the management network you join
+        # to reach the dashboard and pick a new upstream from a fresh location.
+        "connection.autoconnect", "yes",
+        "connection.autoconnect-priority", "100",
     ]
     if ap_password:
         # Pin a clean WPA2-PSK config (RSN + CCMP, PMF off). This is the

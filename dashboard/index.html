@@ -1186,9 +1186,9 @@
 
   async function refresh() {
     const grid = document.getElementById("grid");
-    let wifiCtx = null;
+    const wifiNodes = [];   // collected, then picked deterministically below
     const results = await Promise.all(
-      ENDPOINTS.map(async (ep) => {
+      ENDPOINTS.map(async (ep, i) => {
         try {
           // Stats is required; history is best-effort (older agents lack it).
           const data = await fetchJson(ep.url);
@@ -1198,14 +1198,25 @@
           } catch (e) {
             history = null;
           }
-          // A node that reports a wifi block gets the setup panel.
-          if (data.wifi) wifiCtx = { ep, wifi: data.wifi };
+          if (data.wifi) wifiNodes.push({ ep, wifi: data.wifi, order: i });
           return renderPanel(ep, data, history);
         } catch (e) {
           return renderOffline(ep);
         }
       })
     );
+    // Pick the WiFi panel's node deterministically (don't race inside the
+    // parallel fetches above). Multiple nodes can report WiFi — prefer the one
+    // actually running an access point (the travel-router / repeater, e.g.
+    // scout) over a node that's merely a WiFi client (e.g. bastion on Coleman).
+    wifiNodes.sort((a, b) => a.order - b.order);
+    const apNodes = wifiNodes.filter((n) => n.wifi.ap);
+    let wifiCtx =
+      apNodes.find((n) => n.wifi.ap && n.wifi.ap.active) || apNodes[0] || null;
+    // On-site (served by IP) we also show the config panel for a client-only
+    // node; over the network we only surface AP nodes, so the main dashboard
+    // never displays bastion's own WiFi-client status.
+    if (!wifiCtx && LOCAL_MODE) wifiCtx = wifiNodes[0] || null;
     grid.innerHTML = results.join("");
     syncWifiPanel(wifiCtx);
     lastUpdate = Date.now();

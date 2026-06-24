@@ -541,6 +541,24 @@
   .wifi-result.pending { color: var(--warn); }
   .wifi-result.ok { color: var(--accent); }
   .wifi-result.err { color: var(--danger); }
+
+  /* Read-only connected-devices list (networked dashboard view) */
+  .wifi-devices { display: flex; flex-direction: column; gap: 2px; }
+  .wifi-dev {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border);
+  }
+  .wifi-dev:last-child { border-bottom: 0; }
+  .wifi-dev-name { font-size: 13px; word-break: break-word; }
+  .wifi-dev-mac {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    margin-left: 4px;
+  }
+  .wifi-dev-meta {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    white-space: nowrap; text-align: right;
+  }
+  .wifi-dev-empty { font-size: 12px; color: var(--muted); padding: 6px 0; }
 </style>
 </head>
 <body>
@@ -572,10 +590,17 @@
   // that case talk ONLY to the local agent on the same host, so the dashboard
   // and its WiFi setup panel work fully offline for travel-router setup. A
   // normal hostname visit (http://bastion:9091) is unaffected.
+  // LOCAL_MODE = served on-site from a node by raw IP. In that mode the WiFi
+  // *config* panel is shown (you're physically there to set things up); over
+  // the network (hostname access, e.g. bastion:9091) we show a read-only
+  // connected-devices view instead, so the main dashboard can't reconfigure
+  // a remote node's WiFi by accident.
+  let LOCAL_MODE = false;
   (function useLocalAgentWhenServedByIp() {
     const h = window.location.hostname;
     const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(":"); // IPv4 / IPv6
     if (!isIp && h !== "localhost") return;
+    LOCAL_MODE = true;
     const hostLit = h.includes(":") ? `[${h}]` : h;                    // bracket IPv6
     ENDPOINTS.length = 0;
     ENDPOINTS.push({ key: "this device", host: h, url: `http://${hostLit}:9090/stats` });
@@ -1010,8 +1035,74 @@
   function syncWifiPanel(ctx) {
     const el = document.getElementById("wifi");
     if (!ctx) { el.innerHTML = ""; return; }   // node gone / no wifi
-    if (!document.getElementById("wifi-form")) buildWifiPanel(ctx.ep);
-    updateWifiCurrent(ctx.wifi);
+    if (LOCAL_MODE) {
+      // On-site (served by IP): full WiFi config panel, built once.
+      if (!document.getElementById("wifi-form")) buildWifiPanel(ctx.ep);
+      updateWifiCurrent(ctx.wifi);
+    } else {
+      // Over the network: read-only "who's connected" view, no controls.
+      buildWifiDevicesPanel(ctx);
+    }
+  }
+
+  function fmtDuration(secs) {
+    if (secs == null) return "";
+    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+    if (h) return `${h}h ${m}m`;
+    if (m) return `${m}m`;
+    return `${secs}s`;
+  }
+
+  // Read-only AP client list for the main (networked) dashboard. Rebuilt each
+  // refresh — there's no form state to preserve.
+  function buildWifiDevicesPanel(ctx) {
+    const el = document.getElementById("wifi");
+    const wifi = ctx.wifi || {};
+    const ap = wifi.ap || {};
+    const stations = ap.stations || [];
+    const up = wifi.connected
+      ? `<span class="wifi-current up"><span class="dot">●</span> ${esc(wifi.ssid)}`
+        + (wifi.ip ? ` · ${esc(wifi.ip)}` : "")
+        + (wifi.signal ? ` · ${esc(wifi.signal)}%` : "") + `</span>`
+      : `<span class="wifi-current down"><span class="dot">●</span> not connected</span>`;
+    const apLine = ap.active
+      ? `<span class="wifi-ap up"><span class="dot">●</span> AP ${esc(ap.ssid || "")}`
+        + ` · ${stations.length} client${stations.length === 1 ? "" : "s"}</span>`
+      : `<span class="wifi-ap down"><span class="dot">●</span> AP off</span>`;
+
+    let body;
+    if (!ap.active) {
+      body = "";
+    } else if (!stations.length) {
+      body = `<div class="wifi-dev-empty">No devices connected</div>`;
+    } else {
+      body = stations.map((s) => {
+        const name = s.hostname || s.mac;
+        const meta = [
+          s.ip ? esc(s.ip) : null,
+          s.signal_dbm != null ? `${esc(s.signal_dbm)} dBm` : null,
+          s.connected_seconds != null ? fmtDuration(s.connected_seconds) : null,
+        ].filter(Boolean).join(" · ");
+        return `<div class="wifi-dev">
+            <div class="wifi-dev-name">${esc(name)}${
+              s.hostname ? ` <span class="wifi-dev-mac">${esc(s.mac)}</span>` : ""
+            }</div>
+            <div class="wifi-dev-meta">${meta}</div>
+          </div>`;
+      }).join("");
+    }
+
+    el.innerHTML = `
+      <div class="panel wifi-panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-host">WIFI · ${esc(ctx.ep.key)}</div>
+            <div class="panel-role">connected devices</div>
+          </div>
+          <div class="wifi-status-box">${up}${apLine}</div>
+        </div>
+        <div class="wifi-devices">${body}</div>
+      </div>`;
   }
 
   // Shared POST helper for the WiFi actions (nmcli can be slow).

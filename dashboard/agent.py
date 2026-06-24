@@ -138,6 +138,15 @@ WIFI_AP_IFACE = os.environ.get("WIFI_AP_IFACE", "wlan1")
 AP_CON_NAME = "dashboard-repeater-ap"
 _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
+# Friendly names for AP clients, keyed by lowercase MAC. DHCP hostnames are
+# often missing — notably iOS "Private Wi-Fi Address", which also randomizes
+# the MAC — so the connected-devices list falls back to the raw MAC. Fill in
+# entries here to show names instead. iOS keeps a *stable* private MAC per
+# SSID, so a name you set here sticks for that network.
+#   "ca:57:86:80:5a:3e": "Clay's iPhone",
+KNOWN_DEVICES = {
+}
+
 
 @app.after_request
 def add_cors_headers(response):
@@ -658,6 +667,28 @@ def _ap_leases():
     return leases
 
 
+def _ap_neigh(iface):
+    """Map MAC -> IP from the kernel neighbour (ARP) table for an interface.
+
+    Readable without root, unlike the dnsmasq lease file — so this is the
+    reliable way to attach an IP to each connected station.
+    """
+    out = {}
+    try:
+        r = subprocess.run(
+            ["ip", "-o", "neigh", "show", "dev", iface],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in r.stdout.splitlines():
+            # "10.42.0.203 lladdr ca:57:86:80:5a:3e REACHABLE"
+            parts = line.split()
+            if len(parts) >= 4 and parts[1] == "lladdr":
+                out[parts[2].lower()] = parts[0]
+    except Exception:
+        pass
+    return out
+
+
 def get_ap_status(iface=None):
     """Return the broadcast (AP) radio's state and connected clients."""
     iface = iface or WIFI_AP_IFACE
@@ -692,6 +723,7 @@ def get_ap_status(iface=None):
             capture_output=True, text=True, timeout=10,
         )
         leases = _ap_leases()
+        neigh = _ap_neigh(iface)
         stations = []
         cur = None
         for ln in result.stdout.splitlines():
@@ -700,8 +732,10 @@ def get_ap_status(iface=None):
                 lease = leases.get(mac, {})
                 cur = {
                     "mac": mac,
-                    "ip": lease.get("ip"),
-                    "hostname": lease.get("hostname"),
+                    # ARP table is root-free; lease file (if readable) as backup.
+                    "ip": neigh.get(mac) or lease.get("ip"),
+                    # Curated name wins over a DHCP-provided hostname.
+                    "hostname": KNOWN_DEVICES.get(mac) or lease.get("hostname"),
                     "signal_dbm": None,
                     "connected_seconds": None,
                 }

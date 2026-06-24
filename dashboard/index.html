@@ -1010,7 +1010,7 @@
         s.className = "wifi-current up";
         s.innerHTML = `<span class="dot">●</span> ${esc(wifi.ssid)}` +
           (wifi.ip ? ` · ${esc(wifi.ip)}` : "") +
-          (wifi.signal ? ` · ${esc(wifi.signal)}%` : "");
+          (Number(wifi.signal) > 0 ? ` · ${esc(wifi.signal)}%` : "");
       } else {
         s.className = "wifi-current down";
         s.innerHTML = `<span class="dot">●</span> not connected`;
@@ -1063,7 +1063,7 @@
     const up = wifi.connected
       ? `<span class="wifi-current up"><span class="dot">●</span> ${esc(wifi.ssid)}`
         + (wifi.ip ? ` · ${esc(wifi.ip)}` : "")
-        + (wifi.signal ? ` · ${esc(wifi.signal)}%` : "") + `</span>`
+        + (Number(wifi.signal) > 0 ? ` · ${esc(wifi.signal)}%` : "") + `</span>`
       : `<span class="wifi-current down"><span class="dot">●</span> not connected</span>`;
     const apLine = ap.active
       ? `<span class="wifi-ap up"><span class="dot">●</span> AP ${esc(ap.ssid || "")}`

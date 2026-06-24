@@ -566,6 +566,21 @@
     { key: "scout",   host: "scout",   url: "http://scout:9090/stats" },
   ];
 
+  // Offline / on-site mode: when the dashboard is opened directly from a node
+  // by raw IP — e.g. scout's own AP at http://10.42.0.1:9091 with no internet,
+  // Tailscale, or MagicDNS — the hostname endpoints above can't resolve. In
+  // that case talk ONLY to the local agent on the same host, so the dashboard
+  // and its WiFi setup panel work fully offline for travel-router setup. A
+  // normal hostname visit (http://bastion:9091) is unaffected.
+  (function useLocalAgentWhenServedByIp() {
+    const h = window.location.hostname;
+    const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(":"); // IPv4 / IPv6
+    if (!isIp && h !== "localhost") return;
+    const hostLit = h.includes(":") ? `[${h}]` : h;                    // bracket IPv6
+    ENDPOINTS.length = 0;
+    ENDPOINTS.push({ key: "this device", host: h, url: `http://${hostLit}:9090/stats` });
+  })();
+
   const REFRESH_MS = 30000;
   const GAUGE_MIN = 20;   // °C — bottom of the temperature arc
   const GAUGE_MAX = 90;   // °C — top of the temperature arc (critical)

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 #
 # Install the dashboard static server as a systemd service.
-# Run on bastion only.
+#
+# Run on bastion (the main dashboard) and also on any node you want to
+# manage on-site without a network — e.g. scout, so you can open
+# http://<scout-AP-ip>:9091 from a phone on its access point and use the
+# WiFi panel offline. When opened by raw IP the UI talks only to the local
+# agent (see index.html), so it works with no internet/Tailscale/MagicDNS.
 #
 # Usage:  ./install-dashboard.sh
 #
@@ -28,4 +33,4 @@ if command -v ufw > /dev/null 2>&1; then
   sudo ufw allow 9091 || true
 fi
 
-echo "==> Done. Open http://bastion:9091"
+echo "==> Done. Open http://bastion:9091 (or http://<this-node-ip>:9091 on-site)"

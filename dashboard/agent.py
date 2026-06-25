@@ -35,6 +35,11 @@ PORT = 9090
 # SQLite database for historical samples (CPU/temp/RAM/disk over time).
 # Lives next to the agent so the service user can write it.
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats.db")
+# Persisted list of AP client MACs to block (one per line). Re-applied at
+# startup since iptables rules don't survive a reboot.
+BLOCKLIST_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "blocked-macs"
+)
 
 # How long to keep history, and the minimum spacing between recorded
 # samples (the dashboard polls every 30s, but guard against bursts).
@@ -740,6 +745,7 @@ def get_ap_status(iface=None):
                     "hostname": KNOWN_DEVICES.get(mac) or lease.get("hostname"),
                     "signal_dbm": None,
                     "connected_seconds": None,
+                    "connected": True,
                 }
                 stations.append(cur)
             elif cur is not None:
@@ -755,10 +761,100 @@ def get_ap_status(iface=None):
                     except Exception:
                         pass
         info["clients"] = len(stations)
+        # Flag blocked clients, and surface any blocked MAC that isn't currently
+        # associated (so it can still be unblocked from the dashboard).
+        blocked = set(_read_blocklist())
+        present = {st["mac"] for st in stations}
+        for st in stations:
+            st["blocked"] = st["mac"] in blocked
+        for mac in blocked - present:
+            stations.append({
+                "mac": mac, "ip": None,
+                "hostname": KNOWN_DEVICES.get(mac),
+                "signal_dbm": None, "connected_seconds": None,
+                "connected": False, "blocked": True,
+            })
         info["stations"] = stations
     except Exception:
         pass
     return info
+
+
+# ---- AP client block/unblock (travel-router "timeout a device") --------
+
+def _read_blocklist():
+    try:
+        with open(BLOCKLIST_PATH) as f:
+            return [ln.strip().lower() for ln in f if _MAC_RE.match(ln.strip())]
+    except Exception:
+        return []
+
+
+def _write_blocklist(macs):
+    try:
+        uniq = sorted(set(macs))
+        with open(BLOCKLIST_PATH, "w") as f:
+            f.write("\n".join(uniq) + ("\n" if uniq else ""))
+    except Exception:
+        pass
+
+
+def _block_rule_present(mac):
+    r = subprocess.run(
+        ["sudo", "-n", "iptables", "-C", "FORWARD", "-m", "mac",
+         "--mac-source", mac, "-j", "DROP"],
+        capture_output=True, text=True, timeout=10,
+    )
+    return r.returncode == 0
+
+
+def _set_block_rule(mac, add):
+    """Add/remove a FORWARD DROP for a client MAC (idempotent)."""
+    if add and _block_rule_present(mac):
+        return True
+    if not add and not _block_rule_present(mac):
+        return True
+    r = subprocess.run(
+        ["sudo", "-n", "iptables", "-I" if add else "-D", "FORWARD",
+         "-m", "mac", "--mac-source", mac, "-j", "DROP"],
+        capture_output=True, text=True, timeout=10,
+    )
+    return r.returncode == 0
+
+
+def wifi_block_client(mac):
+    mac = (mac or "").strip().lower()
+    if not _MAC_RE.match(mac):
+        return {"ok": False, "error": "invalid MAC address"}
+    if not _set_block_rule(mac, add=True):
+        return {"ok": False,
+                "error": "couldn't add firewall rule (is iptables in the "
+                         "agent's sudoers?)"}
+    # Kick it off now; the DROP keeps it off the internet if it rejoins.
+    subprocess.run(
+        ["sudo", "-n", "iw", "dev", WIFI_AP_IFACE, "station", "del", mac],
+        capture_output=True, text=True, timeout=10,
+    )
+    macs = _read_blocklist()
+    if mac not in macs:
+        macs.append(mac)
+        _write_blocklist(macs)
+    return {"ok": True, "message": f"Blocked {mac}"}
+
+
+def wifi_unblock_client(mac):
+    mac = (mac or "").strip().lower()
+    if not _MAC_RE.match(mac):
+        return {"ok": False, "error": "invalid MAC address"}
+    _set_block_rule(mac, add=False)
+    _write_blocklist([m for m in _read_blocklist() if m != mac])
+    return {"ok": True, "message": f"Unblocked {mac}"}
+
+
+def reapply_blocklist():
+    """Re-add DROP rules for persisted blocks (iptables is cleared on reboot)."""
+    for mac in _read_blocklist():
+        _set_block_rule(mac, add=True)
 
 
 def wifi_connect(ssid, password, clone_mac, mac, iface=None, username=""):
@@ -1067,6 +1163,22 @@ def wifi_stop_route():
     return jsonify(result)
 
 
+@app.route("/wifi/block", methods=["POST", "OPTIONS"])
+def wifi_block_route():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    body = request.get_json(silent=True) or {}
+    return jsonify(wifi_block_client(body.get("mac")))
+
+
+@app.route("/wifi/unblock", methods=["POST", "OPTIONS"])
+def wifi_unblock_route():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    body = request.get_json(silent=True) or {}
+    return jsonify(wifi_unblock_client(body.get("mac")))
+
+
 @app.route("/history")
 def history():
     try:
@@ -1083,6 +1195,7 @@ def health():
 
 
 init_db()
+reapply_blocklist()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)

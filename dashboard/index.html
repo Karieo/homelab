@@ -559,6 +559,22 @@
     white-space: nowrap; text-align: right;
   }
   .wifi-dev-empty { font-size: 12px; color: var(--muted); padding: 6px 0; }
+  .wifi-dev-head { margin-top: 16px; }
+  .wifi-dev-info { min-width: 0; }
+  .wifi-dev.blocked .wifi-dev-name { color: var(--danger); }
+  .wifi-dev-badge {
+    font-family: var(--mono); font-size: 10px; color: var(--danger);
+    border: 1px solid var(--danger); border-radius: 4px; padding: 0 4px;
+    margin-left: 4px; vertical-align: middle;
+  }
+  .wifi-dev-btn {
+    flex: none; cursor: pointer; font-size: 11px; padding: 4px 10px;
+    border-radius: 6px; background: transparent; color: var(--muted);
+    border: 1px solid var(--border); transition: all .15s;
+  }
+  .wifi-dev-btn.block:hover { border-color: var(--danger); color: var(--danger); }
+  .wifi-dev-btn.unblock { border-color: var(--accent); color: var(--accent); }
+  .wifi-dev-btn:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
 <body>
@@ -915,6 +931,8 @@
     el.dataset.connectUrl = base + "/wifi/connect";
     el.dataset.repeaterUrl = base + "/wifi/repeater";
     el.dataset.stopUrl = base + "/wifi/stop";
+    el.dataset.blockUrl = base + "/wifi/block";
+    el.dataset.unblockUrl = base + "/wifi/unblock";
     el.innerHTML = `
       <div class="panel wifi-panel">
         <div class="panel-head">
@@ -976,11 +994,16 @@
           </div>
           <div id="wifi-rpt-result" class="wifi-result"></div>
         </form>
+
+        <div class="wifi-sub wifi-dev-head">CONNECTED DEVICES</div>
+        <div class="wifi-devices" id="wifi-dev-list"></div>
+        <div id="wifi-dev-result" class="wifi-result"></div>
       </div>`;
 
     document.getElementById("wifi-form").addEventListener("submit", onWifiSubmit);
     document.getElementById("wifi-rpt-form").addEventListener("submit", onRepeaterSubmit);
     document.getElementById("wifi-stop-btn").addEventListener("click", onRepeaterStop);
+    document.getElementById("wifi-dev-list").addEventListener("click", onDeviceAction);
 
     el.querySelectorAll(".wifi-tab").forEach((tab) => {
       tab.addEventListener("click", () => setWifiMode(tab.dataset.mode));
@@ -1040,9 +1063,11 @@
     const el = document.getElementById("wifi");
     if (!ctx) { el.innerHTML = ""; return; }   // node gone / no wifi
     if (LOCAL_MODE) {
-      // On-site (served by IP): full WiFi config panel, built once.
+      // On-site (served by IP): full WiFi config panel, built once, plus a
+      // live device list with Block/Unblock controls.
       if (!document.getElementById("wifi-form")) buildWifiPanel(ctx.ep);
       updateWifiCurrent(ctx.wifi);
+      updateWifiDevices(ctx);
     } else {
       // Over the network: read-only "who's connected" view, no controls.
       buildWifiDevicesPanel(ctx);
@@ -1055,6 +1080,54 @@
     if (h) return `${h}h ${m}m`;
     if (m) return `${m}m`;
     return `${secs}s`;
+  }
+
+  // Shared bits for a station row (used by both the on-site and networked views).
+  function stationName(s) {
+    return esc(s.hostname || s.mac)
+      + (s.hostname ? ` <span class="wifi-dev-mac">${esc(s.mac)}</span>` : "")
+      + (s.blocked ? ` <span class="wifi-dev-badge">blocked</span>` : "");
+  }
+  function stationMeta(s) {
+    return [
+      s.ip ? esc(s.ip) : null,
+      s.signal_dbm != null ? `${esc(s.signal_dbm)} dBm` : null,
+      s.connected_seconds != null ? fmtDuration(s.connected_seconds) : null,
+      s.connected === false ? "offline" : null,
+    ].filter(Boolean).join(" · ");
+  }
+
+  // On-site device list with Block/Unblock buttons. Rebuilt each refresh.
+  function updateWifiDevices(ctx) {
+    const host = document.getElementById("wifi-dev-list");
+    if (!host) return;
+    const ap = (ctx.wifi && ctx.wifi.ap) || {};
+    const stations = ap.stations || [];
+    if (!ap.active) { host.innerHTML = `<div class="wifi-dev-empty">AP off</div>`; return; }
+    if (!stations.length) { host.innerHTML = `<div class="wifi-dev-empty">No devices connected</div>`; return; }
+    host.innerHTML = stations.map((s) => {
+      const action = s.blocked ? "unblock" : "block";
+      const label = s.blocked ? "Unblock" : "Block";
+      return `<div class="wifi-dev${s.blocked ? " blocked" : ""}">
+          <div class="wifi-dev-info">
+            <div class="wifi-dev-name">${stationName(s)}</div>
+            <div class="wifi-dev-meta">${stationMeta(s)}</div>
+          </div>
+          <button type="button" class="wifi-dev-btn ${action}" data-mac="${esc(s.mac)}" data-action="${action}">${label}</button>
+        </div>`;
+    }).join("");
+  }
+
+  async function onDeviceAction(e) {
+    const btn = e.target.closest(".wifi-dev-btn");
+    if (!btn) return;
+    const el = document.getElementById("wifi");
+    const out = document.getElementById("wifi-dev-result");
+    const block = btn.dataset.action === "block";
+    const url = block ? el.dataset.blockUrl : el.dataset.unblockUrl;
+    await wifiPost(url, { mac: btn.dataset.mac }, out, btn,
+      `${block ? "Blocking" : "Unblocking"} ${btn.dataset.mac}…`);
+    refresh();   // re-pull so the row flips to its new state
   }
 
   // Read-only AP client list for the main (networked) dashboard. Rebuilt each
@@ -1080,20 +1153,10 @@
     } else if (!stations.length) {
       body = `<div class="wifi-dev-empty">No devices connected</div>`;
     } else {
-      body = stations.map((s) => {
-        const name = s.hostname || s.mac;
-        const meta = [
-          s.ip ? esc(s.ip) : null,
-          s.signal_dbm != null ? `${esc(s.signal_dbm)} dBm` : null,
-          s.connected_seconds != null ? fmtDuration(s.connected_seconds) : null,
-        ].filter(Boolean).join(" · ");
-        return `<div class="wifi-dev">
-            <div class="wifi-dev-name">${esc(name)}${
-              s.hostname ? ` <span class="wifi-dev-mac">${esc(s.mac)}</span>` : ""
-            }</div>
-            <div class="wifi-dev-meta">${meta}</div>
-          </div>`;
-      }).join("");
+      body = stations.map((s) => `<div class="wifi-dev${s.blocked ? " blocked" : ""}">
+            <div class="wifi-dev-name">${stationName(s)}</div>
+            <div class="wifi-dev-meta">${stationMeta(s)}</div>
+          </div>`).join("");
     }
 
     el.innerHTML = `

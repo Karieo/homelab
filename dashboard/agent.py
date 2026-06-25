@@ -145,6 +145,8 @@ _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 # SSID, so a name you set here sticks for that network.
 #   "ca:57:86:80:5a:3e": "Clay's iPhone",
 KNOWN_DEVICES = {
+    "f2:15:67:f6:d0:ea": "Work phone",
+    "a6:79:f7:2a:90:33": "Personal",
 }
 
 

@@ -57,6 +57,17 @@ if [ -e "/sys/class/net/${WIFI_IFACE}" ] && [ -n "$NMCLI" ]; then
   fi
 fi
 
+# Pi-hole travel-router hook: if this node runs Pi-hole, install the dispatcher
+# that follows the uplink's DHCP DNS for Pi-hole's upstream — so captive portals
+# still work with Pi-hole as the resolver (see README).
+if command -v pihole-FTL > /dev/null 2>&1 && [ -d /etc/NetworkManager/dispatcher.d ]; then
+  echo "==> Installing Pi-hole upstream-follows-uplink dispatcher hook"
+  sudo cp "${SCRIPT_DIR}/dispatcher/50-pihole-upstream" \
+    /etc/NetworkManager/dispatcher.d/50-pihole-upstream
+  sudo chown root:root /etc/NetworkManager/dispatcher.d/50-pihole-upstream
+  sudo chmod 0755 /etc/NetworkManager/dispatcher.d/50-pihole-upstream
+fi
+
 sudo systemctl daemon-reload
 sudo systemctl enable dashboard-agent
 sudo systemctl restart dashboard-agent

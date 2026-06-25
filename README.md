@@ -292,6 +292,17 @@ respawns its dnsmasq, and FTL binds `0.0.0.0:53` cleanly once the conflict is
 gone. Reconnect clients to the AP (toggle their Wi-Fi) so they pick up the new
 DHCP-advertised DNS, then the Pi-hole query counter starts climbing.
 
+**Captive portals.** With Pi-hole as the resolver, a *fixed* upstream (1.1.1.1)
+gets blocked by hotel/airport portals before you log in — DNS dies and the login
+page never appears. `install-agent.sh` installs a dispatcher
+(`/etc/NetworkManager/dispatcher.d/50-pihole-upstream`) that repoints Pi-hole's
+upstream at whatever DNS the **uplink** hands scout on every connect. Pre-login
+the portal's DNS hijack then flows through Pi-hole (so the "Sign in" sheet pops
+automatically); post-login Pi-hole still blocks ads (gravity is applied before
+forwarding). Manual fallback if a portal is ever stubborn: from a device on the
+AP, open `http://1.1.1.1` (a raw IP needs no DNS) to force the portal, log in,
+then names resolve again.
+
 > 🔒 **`LOCAL` vs hotel exposure:** `LOCAL` answers any directly-attached subnet
 > (the AP, loopback — and the upstream/hotel subnet), never the public internet.
 > That's a mild open-resolver exposure on the upstream side. To answer *only* the

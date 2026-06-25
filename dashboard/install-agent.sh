@@ -37,10 +37,13 @@ sed -e "s|/home/clay|${HOME}|g" -e "s|User=clay|User=${USER}|" \
 WIFI_IFACE="${WIFI_IFACE:-wlan0}"
 NMCLI="$(command -v nmcli || true)"
 if [ -e "/sys/class/net/${WIFI_IFACE}" ] && [ -n "$NMCLI" ]; then
-  echo "==> ${WIFI_IFACE} present — enabling WiFi panel (sudoers for nmcli/iw)"
+  echo "==> ${WIFI_IFACE} present — enabling WiFi panel (sudoers for nmcli/iw/iptables)"
   IW="$(command -v iw || true)"
+  IPT="$(command -v iptables || true)"
   RULE="${NMCLI}"
-  [ -n "$IW" ] && RULE="${NMCLI}, ${IW}"
+  [ -n "$IW" ] && RULE="${RULE}, ${IW}"
+  # iptables: block/unblock AP clients (firewall DROP by MAC) from the dashboard.
+  [ -n "$IPT" ] && RULE="${RULE}, ${IPT}"
   SUDOERS="/etc/sudoers.d/dashboard-nmcli"
   echo "${USER} ALL=(root) NOPASSWD: ${RULE}" | sudo tee "$SUDOERS" > /dev/null
   sudo chmod 0440 "$SUDOERS"

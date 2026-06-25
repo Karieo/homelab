@@ -314,15 +314,29 @@ then names resolve again.
 > `sudo`, and the dashboard's Pi-hole widget reads stats via `PIHOLE_PASSWORD`
 > (see the Pi-hole widget section).
 
-The agent runs `nmcli` (and `iw`) via passwordless sudo. `install-agent.sh` sets
-up the scoped sudoers drop-in automatically when `wlan0` + `nmcli` are present. For
-a node that's already installed (auto-update only copies files), add it once:
+The agent runs `nmcli`, `iw`, and `iptables` via passwordless sudo.
+`install-agent.sh` sets up the scoped sudoers drop-in automatically when `wlan0`
++ `nmcli` are present. For a node that's already installed (auto-update only
+copies files), add it once:
 
 ```bash
-echo "$USER ALL=(root) NOPASSWD: $(command -v nmcli), $(command -v iw)" \
+echo "$USER ALL=(root) NOPASSWD: $(command -v nmcli), $(command -v iw), $(command -v iptables)" \
   | sudo tee /etc/sudoers.d/dashboard-nmcli && sudo chmod 0440 /etc/sudoers.d/dashboard-nmcli
 sudo systemctl restart dashboard-agent
 ```
+
+(`iptables` is needed for the Block/Unblock buttons below; `nmcli`/`iw` for
+connect/repeater.)
+
+**Block / unblock AP clients.** On the on-site (IP-served) dashboard, each entry
+in the connected-devices list has a **Block**/**Unblock** button. Block adds a
+firewall `DROP` for that client's MAC (`POST /wifi/block`) and deauthenticates it
+— it stays off the internet even if it rejoins; Unblock removes the rule
+(`POST /wifi/unblock`). Blocks persist in `dashboard/blocked-macs` and are
+re-applied at agent startup (iptables rules don't survive a reboot). A
+currently-blocked-but-disconnected device still shows in the list so you can
+unblock it. The networked dashboard shows a `blocked` badge but no controls
+(config is on-site only).
 
 > ⚠️ **Security:** these endpoints are unauthenticated (like the rest of the
 > dashboard) and reconfigure the node's networking. Intended for Tailscale-only

@@ -40,6 +40,13 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats.db")
 BLOCKLIST_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "blocked-macs"
 )
+# Flag file: when present, "curfew" mode is on — any AP client whose MAC isn't
+# in KNOWN_DEVICES is blocked automatically (allow-list mode).
+BLOCK_UNKNOWN_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "block-unknown"
+)
+# How often the background enforcer re-checks for unknown clients (seconds).
+ENFORCE_INTERVAL = 20
 
 # How long to keep history, and the minimum spacing between recorded
 # samples (the dashboard polls every 30s, but guard against bursts).
@@ -761,19 +768,34 @@ def get_ap_status(iface=None):
                     except Exception:
                         pass
         info["clients"] = len(stations)
-        # Flag blocked clients, and surface any blocked MAC that isn't currently
-        # associated (so it can still be unblocked from the dashboard).
-        blocked = set(_read_blocklist())
+        # Classify each client: explicitly blocked ("manual"), curfew-blocked
+        # ("unknown" — not a known device while curfew is on), or allowed.
+        explicit = set(_read_blocklist())
+        curfew = is_block_unknown()
+        known = {m.lower() for m in KNOWN_DEVICES}
+        info["block_unknown"] = curfew
+
+        def classify(st):
+            if st["mac"] in explicit:
+                st["blocked"], st["block_reason"] = True, "manual"
+            elif curfew and st["mac"] not in known:
+                st["blocked"], st["block_reason"] = True, "unknown"
+            else:
+                st["blocked"], st["block_reason"] = False, None
+
         present = {st["mac"] for st in stations}
         for st in stations:
-            st["blocked"] = st["mac"] in blocked
-        for mac in blocked - present:
-            stations.append({
+            classify(st)
+        # Surface explicitly-blocked MACs that aren't currently associated, so
+        # they can still be unblocked from the dashboard.
+        for mac in explicit - present:
+            st = {
                 "mac": mac, "ip": None,
                 "hostname": KNOWN_DEVICES.get(mac),
                 "signal_dbm": None, "connected_seconds": None,
-                "connected": False, "blocked": True,
-            })
+                "connected": False, "blocked": True, "block_reason": "manual",
+            }
+            stations.append(st)
         info["stations"] = stations
     except Exception:
         pass
@@ -855,6 +877,69 @@ def reapply_blocklist():
     """Re-add DROP rules for persisted blocks (iptables is cleared on reboot)."""
     for mac in _read_blocklist():
         _set_block_rule(mac, add=True)
+
+
+# ---- Curfew: block any AP client not in KNOWN_DEVICES ------------------
+
+def is_block_unknown():
+    return os.path.exists(BLOCK_UNKNOWN_PATH)
+
+
+def _ap_station_macs():
+    """Lowercase MACs currently associated to the AP (best-effort)."""
+    try:
+        r = subprocess.run(
+            ["sudo", "-n", "iw", "dev", WIFI_AP_IFACE, "station", "dump"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return [ln.split()[1].lower()
+                for ln in r.stdout.splitlines() if ln.startswith("Station")]
+    except Exception:
+        return []
+
+
+def enforce_block_unknown():
+    """Block every connected client whose MAC isn't a known device. Curfew
+    blocks are dynamic (driven by KNOWN_DEVICES), so they're NOT written to the
+    persistent blocklist — name a device to let it back on."""
+    known = {m.lower() for m in KNOWN_DEVICES}
+    for mac in _ap_station_macs():
+        if mac not in known and not _block_rule_present(mac):
+            _set_block_rule(mac, add=True)
+            subprocess.run(
+                ["sudo", "-n", "iw", "dev", WIFI_AP_IFACE, "station", "del", mac],
+                capture_output=True, text=True, timeout=10,
+            )
+
+
+def set_block_unknown(enabled):
+    if enabled:
+        try:
+            open(BLOCK_UNKNOWN_PATH, "w").close()
+        except Exception:
+            pass
+        enforce_block_unknown()
+    else:
+        try:
+            os.remove(BLOCK_UNKNOWN_PATH)
+        except FileNotFoundError:
+            pass
+        # Lift curfew DROPs — anything currently blocked that isn't an explicit
+        # manual block (those stay).
+        explicit = set(_read_blocklist())
+        for mac in _ap_station_macs():
+            if mac not in explicit and _block_rule_present(mac):
+                _set_block_rule(mac, add=False)
+
+
+def _enforcement_loop():
+    while True:
+        try:
+            if is_block_unknown():
+                enforce_block_unknown()
+        except Exception:
+            pass
+        time.sleep(ENFORCE_INTERVAL)
 
 
 def wifi_connect(ssid, password, clone_mac, mac, iface=None, username=""):
@@ -1179,6 +1264,20 @@ def wifi_unblock_route():
     return jsonify(wifi_unblock_client(body.get("mac")))
 
 
+@app.route("/wifi/block-unknown", methods=["POST", "OPTIONS"])
+def wifi_block_unknown_route():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get("enabled"))
+    set_block_unknown(enabled)
+    return jsonify({
+        "ok": True, "block_unknown": enabled,
+        "message": ("Curfew on — only named devices allowed"
+                    if enabled else "Curfew off"),
+    })
+
+
 @app.route("/history")
 def history():
     try:
@@ -1196,6 +1295,10 @@ def health():
 
 init_db()
 reapply_blocklist()
+# Background enforcer for curfew mode (block clients not in KNOWN_DEVICES).
+# Only meaningful where there's an AP radio; harmless otherwise.
+if has_iface(WIFI_AP_IFACE):
+    threading.Thread(target=_enforcement_loop, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)

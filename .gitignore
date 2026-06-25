@@ -1,6 +1,7 @@
 # Agent runtime data
 dashboard/stats.db
 dashboard/blocked-macs
+dashboard/block-unknown
 
 # Local secrets (Discord/ntfy webhook, etc.) — never commit
 dashboard/notify.env

@@ -559,7 +559,19 @@
     white-space: nowrap; text-align: right;
   }
   .wifi-dev-empty { font-size: 12px; color: var(--muted); padding: 6px 0; }
-  .wifi-dev-head { margin-top: 16px; }
+  .wifi-dev-head {
+    margin-top: 16px; display: flex; align-items: center;
+    justify-content: space-between; gap: 10px;
+  }
+  .wifi-curfew {
+    display: flex; align-items: center; gap: 5px; cursor: pointer;
+    font-size: 11px; color: var(--muted); letter-spacing: 0; text-transform: none;
+  }
+  .wifi-curfew input { accent-color: var(--danger); width: 14px; height: 14px; }
+  .wifi-dev-tag {
+    flex: none; font-family: var(--mono); font-size: 10px; color: var(--danger);
+    border: 1px solid var(--danger); border-radius: 6px; padding: 3px 8px;
+  }
   .wifi-dev-info { min-width: 0; }
   .wifi-dev.blocked .wifi-dev-name { color: var(--danger); }
   .wifi-dev-badge {
@@ -933,6 +945,7 @@
     el.dataset.stopUrl = base + "/wifi/stop";
     el.dataset.blockUrl = base + "/wifi/block";
     el.dataset.unblockUrl = base + "/wifi/unblock";
+    el.dataset.blockUnknownUrl = base + "/wifi/block-unknown";
     el.innerHTML = `
       <div class="panel wifi-panel">
         <div class="panel-head">
@@ -995,7 +1008,11 @@
           <div id="wifi-rpt-result" class="wifi-result"></div>
         </form>
 
-        <div class="wifi-sub wifi-dev-head">CONNECTED DEVICES</div>
+        <div class="wifi-sub wifi-dev-head">
+          <span>CONNECTED DEVICES</span>
+          <label class="wifi-curfew" title="Block any device that isn't named in KNOWN_DEVICES">
+            <input id="wifi-curfew" type="checkbox" /><span>Block unknown</span></label>
+        </div>
         <div class="wifi-devices" id="wifi-dev-list"></div>
         <div id="wifi-dev-result" class="wifi-result"></div>
       </div>`;
@@ -1004,6 +1021,7 @@
     document.getElementById("wifi-rpt-form").addEventListener("submit", onRepeaterSubmit);
     document.getElementById("wifi-stop-btn").addEventListener("click", onRepeaterStop);
     document.getElementById("wifi-dev-list").addEventListener("click", onDeviceAction);
+    document.getElementById("wifi-curfew").addEventListener("change", onCurfewToggle);
 
     el.querySelectorAll(".wifi-tab").forEach((tab) => {
       tab.addEventListener("click", () => setWifiMode(tab.dataset.mode));
@@ -1097,25 +1115,34 @@
     ].filter(Boolean).join(" · ");
   }
 
+  // Per-station control. Manual blocks get an Unblock button; curfew-blocked
+  // (unknown) devices show a non-actionable tag — name them to allow them.
+  function stationControl(s) {
+    if (s.block_reason === "unknown") {
+      return `<span class="wifi-dev-tag">curfew</span>`;
+    }
+    const action = s.blocked ? "unblock" : "block";
+    const label = s.blocked ? "Unblock" : "Block";
+    return `<button type="button" class="wifi-dev-btn ${action}" data-mac="${esc(s.mac)}" data-action="${action}">${label}</button>`;
+  }
+
   // On-site device list with Block/Unblock buttons. Rebuilt each refresh.
   function updateWifiDevices(ctx) {
     const host = document.getElementById("wifi-dev-list");
     if (!host) return;
     const ap = (ctx.wifi && ctx.wifi.ap) || {};
+    const curfew = document.getElementById("wifi-curfew");
+    if (curfew && document.activeElement !== curfew) curfew.checked = !!ap.block_unknown;
     const stations = ap.stations || [];
     if (!ap.active) { host.innerHTML = `<div class="wifi-dev-empty">AP off</div>`; return; }
     if (!stations.length) { host.innerHTML = `<div class="wifi-dev-empty">No devices connected</div>`; return; }
-    host.innerHTML = stations.map((s) => {
-      const action = s.blocked ? "unblock" : "block";
-      const label = s.blocked ? "Unblock" : "Block";
-      return `<div class="wifi-dev${s.blocked ? " blocked" : ""}">
+    host.innerHTML = stations.map((s) => `<div class="wifi-dev${s.blocked ? " blocked" : ""}">
           <div class="wifi-dev-info">
             <div class="wifi-dev-name">${stationName(s)}</div>
             <div class="wifi-dev-meta">${stationMeta(s)}</div>
           </div>
-          <button type="button" class="wifi-dev-btn ${action}" data-mac="${esc(s.mac)}" data-action="${action}">${label}</button>
-        </div>`;
-    }).join("");
+          ${stationControl(s)}
+        </div>`).join("");
   }
 
   async function onDeviceAction(e) {
@@ -1128,6 +1155,14 @@
     await wifiPost(url, { mac: btn.dataset.mac }, out, btn,
       `${block ? "Blocking" : "Unblocking"} ${btn.dataset.mac}…`);
     refresh();   // re-pull so the row flips to its new state
+  }
+
+  async function onCurfewToggle(e) {
+    const el = document.getElementById("wifi");
+    const out = document.getElementById("wifi-dev-result");
+    await wifiPost(el.dataset.blockUnknownUrl, { enabled: e.target.checked }, out, e.target,
+      e.target.checked ? "Enabling curfew…" : "Disabling curfew…");
+    refresh();
   }
 
   // Read-only AP client list for the main (networked) dashboard. Rebuilt each
@@ -1164,7 +1199,7 @@
         <div class="panel-head">
           <div>
             <div class="panel-host">WIFI · ${esc(ctx.ep.key)}</div>
-            <div class="panel-role">connected devices</div>
+            <div class="panel-role">connected devices${ap.block_unknown ? " · curfew on" : ""}</div>
           </div>
           <div class="wifi-status-box">${up}${apLine}</div>
         </div>

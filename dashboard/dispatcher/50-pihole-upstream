@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# NetworkManager dispatcher: follow the uplink's DNS for Pi-hole's upstream.
+#
+# Why: with Pi-hole as the AP resolver on a travel router, *fixed* upstreams
+# (1.1.1.1, 8.8.8.8) get blocked by hotel/airport captive portals before you
+# log in — so DNS dies and the "Sign in to network" sheet never pops. By
+# pointing Pi-hole's upstream at whatever DNS the current uplink hands us over
+# DHCP:
+#   - pre-login, the portal's DNS hijack flows through Pi-hole, so captive
+#     detection works and the login page appears automatically;
+#   - post-login, Pi-hole still blocks ads (gravity is applied before the query
+#     is forwarded upstream).
+#
+# Runs as root (dispatcher scripts do), so it can call pihole-FTL directly —
+# no sudoers entry needed. Installed by install-agent.sh on Pi-hole nodes.
+#
+# NetworkManager calls this as:  <script> <iface> <action>
+# and exports DHCP4_* / CONNECTION_ID in the environment.
+
+IFACE="$1"
+ACTION="$2"
+
+# Ignore the AP's own connection (no upstream DNS) and anything that isn't a
+# fresh address assignment, so we don't churn on every NM event.
+AP_CON_NAME="${AP_CON_NAME:-dashboard-repeater-ap}"
+[ "$CONNECTION_ID" = "$AP_CON_NAME" ] && exit 0
+case "$ACTION" in
+  up | dhcp4-change | vpn-up) ;;
+  *) exit 0 ;;
+esac
+
+# Only relevant on nodes actually running Pi-hole.
+command -v pihole-FTL > /dev/null 2>&1 || exit 0
+
+# DNS servers the uplink advertised (DHCP option 6), space-separated. Fall back
+# to NetworkManager's resolved list for the device if the env var is absent
+# (e.g. when this script is run by hand to apply the current uplink).
+SERVERS="$DHCP4_DOMAIN_NAME_SERVERS"
+if [ -z "$SERVERS" ] && [ -n "$IFACE" ]; then
+  SERVERS="$(nmcli -g IP4.DNS device show "$IFACE" 2> /dev/null | tr '|' ' ')"
+fi
+[ -z "${SERVERS// /}" ] && exit 0   # no DNS to set — leave upstreams as-is
+
+# Skip if unchanged since last run (belt-and-suspenders against reload loops).
+STATE=/run/pihole-upstream.last
+[ "$SERVERS" = "$(cat "$STATE" 2> /dev/null)" ] && exit 0
+
+# Build a JSON array of sane-looking IPs: ["1.2.3.4","5.6.7.8"]
+ARRAY=""
+for s in $SERVERS; do
+  case "$s" in
+    "" | *[!0-9.:]*) continue ;;   # IPv4/IPv6 chars only
+  esac
+  ARRAY="${ARRAY:+$ARRAY,}\"$s\""
+done
+[ -z "$ARRAY" ] && exit 0
+
+pihole-FTL --config dns.upstreams "[$ARRAY]" > /dev/null 2>&1 || exit 0
+pihole reloaddns > /dev/null 2>&1 || true
+echo "$SERVERS" > "$STATE"
+logger -t pihole-upstream "Pi-hole upstreams -> ${SERVERS} (via ${IFACE}/${CONNECTION_ID:-?})"
+exit 0

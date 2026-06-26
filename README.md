@@ -338,6 +338,15 @@ currently-blocked-but-disconnected device still shows in the list so you can
 unblock it. The networked dashboard shows a `blocked` badge but no controls
 (config is on-site only).
 
+**Block unknown devices (curfew / allow-list).** The **Block unknown** toggle
+above the device list flips the AP to allow-list mode: any client whose MAC
+isn't in `KNOWN_DEVICES` is blocked and deauthenticated, and a background
+enforcer (`POST /wifi/block-unknown`, every ~20s) keeps new unknowns out. Such
+clients show a `curfew` tag instead of a button — to let one on, **name it** in
+`KNOWN_DEVICES` (no longer "unknown"). Curfew blocks are dynamic (not written to
+`blocked-macs`); the toggle state persists in `dashboard/block-unknown`. Manual
+per-device blocks still apply independently and survive turning curfew off.
+
 > ⚠️ **Security:** these endpoints are unauthenticated (like the rest of the
 > dashboard) and reconfigure the node's networking. Intended for Tailscale-only
 > access. Credentials are passed to `nmcli` as argv (no shell injection), but a

@@ -83,6 +83,12 @@ EXTRA_SERVICES = {
     "scout": [
         {"name": "pihole", "unit": "pihole-FTL.service", "port": 80},
         {"name": "kiwix", "unit": "kiwix.service", "port": 8090},
+        {"name": "meshtastic", "unit": "meshtasticd.service", "port": None,
+         "optional": True},
+    ],
+    "bastion": [
+        {"name": "meshtastic", "unit": "meshtasticd.service", "port": None,
+         "optional": True},
     ],
 }
 
@@ -129,6 +135,26 @@ REMNDRS = {
         "token": os.environ.get("REMNDRS_TOKEN", ""),
     },
 }
+
+# Meshtastic radio status, per host. Talks to meshtasticd (or any node
+# reachable over the Meshtastic TCP API, port 4403) via the `meshtastic`
+# Python package, which is optional; without it (or with the API down) the
+# widget simply doesn't render. Same agent.py ships to every node, but only
+# the entry matching that node's own hostname is ever read, so bastion and
+# scout can each run their own local radio against the same env var name.
+# Enable by installing the package on the node:
+#   pip3 install --break-system-packages meshtastic
+MESHTASTIC = {
+    "scout": {
+        "host": os.environ.get("MESHTASTIC_HOST", "localhost"),
+    },
+    "bastion": {
+        "host": os.environ.get("MESHTASTIC_HOST", "localhost"),
+    },
+}
+MESHTASTIC_SAMPLE_SEC = 60  # radio polls are expensive; cache this long
+_mesh_cache = {"ts": 0.0, "data": None}
+_mesh_lock = threading.Lock()
 
 # Matches the published host port in `docker ps` Ports output, e.g.
 # "0.0.0.0:3000->3000/tcp" or ":::8096->8096/tcp".
@@ -241,10 +267,26 @@ def _systemd_active(unit):
         return False
 
 
+def _unit_exists(unit):
+    """True if a systemd unit is installed, regardless of active state."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "list-unit-files", unit, "--no-legend"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
+
+
 def get_extra_services(hostname):
     """Report configured native systemd services for this host."""
     services = []
     for svc in EXTRA_SERVICES.get(hostname, []):
+        if svc.get("optional") and not _unit_exists(svc["unit"]):
+            # Not installed on this node — skip rather than show a bogus
+            # red "stopped" dot for a service that was never set up here.
+            continue
         services.append(
             {
                 "name": svc["name"],
@@ -576,6 +618,64 @@ def get_remndrs_count(hostname):
     if isinstance(res, list):
         return len(res)
     return None
+
+
+# ---- Meshtastic radio status -------------------------------------------
+
+def _mesh_fetch(host):
+    """Open the Meshtastic TCP API, read node DB + own metrics, close."""
+    from meshtastic.tcp_interface import TCPInterface  # lazy: optional dep
+
+    iface = TCPInterface(hostname=host)
+    try:
+        my = iface.getMyNodeInfo() or {}
+        nodes = dict(iface.nodes or {})
+    finally:
+        iface.close()
+
+    metrics = my.get("deviceMetrics") or {}
+    my_num = my.get("num")
+    last_heard = None
+    for n in nodes.values():
+        if n.get("num") == my_num:
+            continue
+        lh = n.get("lastHeard")
+        if lh and (last_heard is None or lh > last_heard):
+            last_heard = lh
+    return {
+        "nodes": len(nodes),
+        "battery": metrics.get("batteryLevel"),        # 101 == on USB power
+        "voltage": metrics.get("voltage"),
+        "channel_util": metrics.get("channelUtilization"),
+        "air_util_tx": metrics.get("airUtilTx"),
+        "last_heard": last_heard,                      # epoch secs, other nodes
+    }
+
+
+def get_meshtastic_status(hostname):
+    """Cached mesh status, or None when unconfigured/unavailable."""
+    cfg = MESHTASTIC.get(hostname)
+    if not cfg:
+        return None
+    with _mesh_lock:
+        if time.time() - _mesh_cache["ts"] < MESHTASTIC_SAMPLE_SEC:
+            return _mesh_cache["data"]
+    try:
+        import concurrent.futures
+        # No `with` here: the context manager's shutdown(wait=True) would
+        # block on a hung fetch, defeating the timeout. shutdown(wait=False)
+        # abandons the worker instead (the 60s cache stops them piling up).
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            data = ex.submit(_mesh_fetch, cfg["host"]).result(timeout=15)
+        finally:
+            ex.shutdown(wait=False)
+    except Exception:
+        data = None
+    with _mesh_lock:
+        _mesh_cache["ts"] = time.time()
+        _mesh_cache["data"] = data
+    return data
 
 
 # ---- WiFi (NetworkManager) --------------------------------------------
@@ -1148,6 +1248,10 @@ def stats():
     remndrs = get_remndrs_count(hostname)
     if remndrs is not None:
         payload["remndrs_open"] = remndrs
+
+    mesh = get_meshtastic_status(hostname)
+    if mesh is not None:
+        payload["meshtastic"] = mesh
 
     if has_iface(WIFI_IFACE):
         payload["wifi"] = get_wifi_status()

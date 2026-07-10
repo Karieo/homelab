@@ -784,6 +784,34 @@
       </div>`;
   }
 
+  // ---- Meshtastic widget ---------------------------------------------
+  function fmtAgo(epoch) {
+    if (epoch == null) return "—";
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - epoch));
+    if (s < 60) return s + "s ago";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    return Math.floor(s / 86400) + "d ago";
+  }
+
+  function meshtasticBlock(m) {
+    if (!m) return "";
+    const batt = m.battery == null ? "—"
+      : m.battery > 100 ? "PWR" : Math.round(m.battery) + "%";
+    const util = m.channel_util == null ? "—"
+      : m.channel_util.toFixed(1) + "%";
+    return `
+      <div class="pihole">
+        <div class="pihole-head">MESHTASTIC</div>
+        <div class="pihole-stats">
+          <div class="ph-stat"><span class="ph-num">${fmtNum(m.nodes)}</span><span class="ph-lbl">nodes</span></div>
+          <div class="ph-stat"><span class="ph-num">${esc(batt)}</span><span class="ph-lbl">battery</span></div>
+          <div class="ph-stat"><span class="ph-num">${esc(util)}</span><span class="ph-lbl">ch util</span></div>
+          <div class="ph-stat"><span class="ph-num">${esc(fmtAgo(m.last_heard))}</span><span class="ph-lbl">last heard</span></div>
+        </div>
+      </div>`;
+  }
+
   // Escape untrusted strings (e.g. Jellyfin media titles) for HTML.
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -890,6 +918,7 @@
         ${netLine(net)}
 
         ${piholeBlock(data.pihole)}
+        ${meshtasticBlock(data.meshtastic)}
 
         ${jellyfinBlock(data.jellyfin)}
 

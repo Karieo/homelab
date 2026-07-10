@@ -18,6 +18,8 @@ User=clay
 # Environment=JELLYFIN_BASE_URL=http://localhost:8096
 # Remndrs open-reminder count:
 # Environment=REMNDRS_COUNT_URL=http://localhost:3000/api/reminders/open/count
+# Meshtastic widget (node running meshtasticd / radio with TCP API):
+# Environment=MESHTASTIC_HOST=localhost
 
 [Install]
 WantedBy=multi-user.target

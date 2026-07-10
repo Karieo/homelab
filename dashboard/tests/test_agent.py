@@ -9,6 +9,7 @@ gracefully around all of them, and these tests pin that behavior. Run with:
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -63,6 +64,29 @@ def test_wifi_routes_without_interface():
     c = client()
     assert c.get("/wifi/status").status_code == 400
     assert c.post("/wifi/connect", json={"ssid": "x"}).status_code == 400
+
+
+# ---- Background sampler / stats cache -----------------------------------
+
+def test_build_payload_shape():
+    payload, sample = agent.build_payload()
+    assert payload["hostname"]
+    assert len(sample) == 4  # (cpu, temp, ram, disk) for record_sample
+
+
+def test_stats_served_from_cache():
+    # Wait for the sampler's first build so both reads land inside one
+    # stable 30s window (no rebuild can happen between them).
+    for _ in range(100):
+        with agent._stats_cache_lock:
+            if agent._stats_cache["payload"] is not None:
+                break
+        time.sleep(0.1)
+    c = client()
+    a = c.get("/stats").get_json()
+    b = c.get("/stats").get_json()
+    # Identical build timestamp proves no per-request collection happened.
+    assert a["timestamp"] == b["timestamp"]
 
 
 # ---- Trusted-source gate on mutating WiFi endpoints ---------------------

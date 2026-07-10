@@ -55,6 +55,14 @@ ENFORCE_INTERVAL = 20
 HISTORY_RETENTION_DAYS = 7
 MIN_SAMPLE_INTERVAL_SEC = 20
 
+# The background sampler rebuilds the /stats payload (and records a history
+# sample) this often. Requests are served from the cached payload, so history
+# is continuous from boot — with or without anyone watching — and /stats
+# answers in milliseconds instead of blocking on subprocess calls.
+SAMPLE_INTERVAL_SEC = 30
+_stats_cache_lock = threading.Lock()
+_stats_cache = {"built": 0.0, "payload": None}
+
 # Friendly role labels per host. Falls back to a generic label when the
 # hostname is not known.
 ROLES = {
@@ -1261,15 +1269,14 @@ def get_uptime():
     return " ".join(parts)
 
 
-@app.route("/stats")
-def stats():
+def build_payload():
+    """Collect everything /stats reports. Slow (subprocesses + a 1s CPU
+    sample) — called by the background sampler, not per-request."""
     hostname = socket.gethostname()
     disk = psutil.disk_usage("/")
     ram = psutil.virtual_memory()
     cpu_percent = psutil.cpu_percent(interval=1)
     temp = get_cpu_temp()
-
-    record_sample(cpu_percent, temp, ram.percent, disk.percent)
 
     network = get_tailscale_status()
     network.update(get_network_throughput())
@@ -1318,6 +1325,37 @@ def stats():
     if has_iface(WIFI_IFACE):
         payload["wifi"] = get_wifi_status()
 
+    return payload, (cpu_percent, temp, ram.percent, disk.percent)
+
+
+def _refresh_stats_cache():
+    """Rebuild the /stats payload, cache it, and record a history sample."""
+    payload, sample = build_payload()
+    with _stats_cache_lock:
+        _stats_cache["payload"] = payload
+        _stats_cache["built"] = time.time()
+    record_sample(*sample)
+    return payload
+
+
+def _sampler_loop():
+    while True:
+        try:
+            _refresh_stats_cache()
+        except Exception:
+            pass  # never let one bad tick kill sampling
+        time.sleep(SAMPLE_INTERVAL_SEC)
+
+
+@app.route("/stats")
+def stats():
+    with _stats_cache_lock:
+        payload = _stats_cache["payload"]
+        age = time.time() - _stats_cache["built"]
+    # Serve the cache; rebuild synchronously only if the sampler hasn't
+    # produced anything yet (first seconds after boot) or has wedged.
+    if payload is None or age > SAMPLE_INTERVAL_SEC * 3:
+        payload = _refresh_stats_cache()
     return jsonify(payload)
 
 
@@ -1467,6 +1505,11 @@ def health():
 
 init_db()
 reapply_blocklist()
+# Prime psutil's CPU counter (its first interval=None call returns 0.0),
+# then sample continuously in the background — history no longer depends
+# on someone polling /stats.
+psutil.cpu_percent(interval=None)
+threading.Thread(target=_sampler_loop, daemon=True).start()
 # Background enforcer for curfew mode (block clients not in KNOWN_DEVICES).
 # Only meaningful where there's an AP radio; harmless otherwise.
 if has_iface(WIFI_AP_IFACE):

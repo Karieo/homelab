@@ -51,7 +51,10 @@ browser             ◀── polls every 30s via fetch()
 
 The agent also exposes **`GET /history?hours=24`** — downsampled CPU/temp/RAM/disk
 samples logged to a local SQLite file (`dashboard/stats.db`, gitignored, 7-day
-retention) and drawn as 24h sparklines under each node. `GET /stats` additionally
+retention) and drawn as 24h sparklines under each node. Samples are recorded by
+a background thread every 30s from boot (not just while the dashboard is open),
+so the sparklines have no gaps; `/stats` itself is served from that thread's
+cached payload (at most ~30s old) and answers in milliseconds. `GET /stats` additionally
 reports live network throughput (`rx_bytes_sec`/`tx_bytes_sec`), extra mounted
 disks, and—where configured—a `pihole` summary, `jellyfin` now-playing list, and
 `remndrs_open` count.

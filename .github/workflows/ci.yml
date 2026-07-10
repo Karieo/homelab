@@ -1,0 +1,40 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install flask psutil pytest
+      - name: Syntax check
+        run: python -m py_compile dashboard/agent.py dashboard/alerter.py
+      - name: Smoke tests
+        run: pytest dashboard/tests -q
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash syntax
+        run: |
+          bash -n dashboard/update.sh
+          bash -n dashboard/install-agent.sh
+          bash -n dashboard/install-dashboard.sh
+          bash -n dashboard/install-alerter.sh
+          bash -n dashboard/install-updater.sh
+          bash -n dashboard/dispatcher/50-pihole-upstream
+          sh -n dashboard/dispatcher/90-dashboard-repeater-nat
+      - name: shellcheck (errors only)
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck --severity=error --exclude=SC1090,SC1091 \
+            dashboard/update.sh dashboard/install-*.sh \
+            dashboard/dispatcher/50-pihole-upstream \
+            dashboard/dispatcher/90-dashboard-repeater-nat

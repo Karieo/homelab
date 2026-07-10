@@ -51,7 +51,10 @@ browser             ◀── polls every 30s via fetch()
 
 The agent also exposes **`GET /history?hours=24`** — downsampled CPU/temp/RAM/disk
 samples logged to a local SQLite file (`dashboard/stats.db`, gitignored, 7-day
-retention) and drawn as 24h sparklines under each node. `GET /stats` additionally
+retention) and drawn as 24h sparklines under each node. Samples are recorded by
+a background thread every 30s from boot (not just while the dashboard is open),
+so the sparklines have no gaps; `/stats` itself is served from that thread's
+cached payload (at most ~30s old) and answers in milliseconds. `GET /stats` additionally
 reports live network throughput (`rx_bytes_sec`/`tx_bytes_sec`), extra mounted
 disks, and—where configured—a `pihole` summary, `jellyfin` now-playing list, and
 `remndrs_open` count.
@@ -88,6 +91,12 @@ Notes:
 - **Deploy pings:** if a notification channel is configured (see below), each
   successful deploy posts `<host> deploy — updated <old> → <new> — <commit>` to
   Discord/ntfy (green), and a fast-forward failure posts a red alert.
+- **Health check + rollback:** on nodes running the agent, each deploy is
+  verified against `localhost:9090/health` (up to ~60s). If the agent doesn't
+  come back, the previously-staged files are restored, services restarted, and
+  a red notification sent. The git repo stays at the new commit (fast-forward
+  only), so the node idles healthy on the old files instead of retry-looping —
+  push a fix, or run `update.sh --force` to retry the same commit.
 
 #### Shared notification config (`notify.env`)
 
@@ -190,10 +199,17 @@ For Discord, create the webhook in the target channel: **Server Settings →
 Integrations → Webhooks → New Webhook → Copy Webhook URL**. Alerts arrive as
 colored embeds (red for offline / hot, green for recovered).
 
-Alerts fire on transitions only (offline ⇄ online, temp high ⇄ cleared) with
-hysteresis, so a persistently-hot node won't spam. Tunables: `ALERT_TEMP_HIGH`
-(default 80°C), `ALERT_TEMP_CLEAR` (72°C), `ALERT_POLL_SEC` (60),
-`ALERT_OFFLINE_AFTER` (2), `ALERT_NODES`.
+Alerts fire on transitions only (offline ⇄ online, temp high ⇄ cleared, disk
+full ⇄ cleared, service down ⇄ back up) with hysteresis and debounce, so a
+persistently-hot node or a container restarting during a deploy won't spam.
+Disk alerts cover the root disk and any `extra_disks`; service alerts cover
+everything the agent reports (containers + `EXTRA_SERVICES`), and a service
+that's removed on purpose is forgotten silently. Tunables: `ALERT_TEMP_HIGH`
+(default 80°C), `ALERT_TEMP_CLEAR` (72°C), `ALERT_DISK_HIGH` (90%),
+`ALERT_DISK_CLEAR` (85%), `ALERT_SVC_AFTER` (2 polls), `ALERT_POLL_SEC` (60),
+`ALERT_OFFLINE_AFTER` (2), `ALERT_NODES`. Hysteresis state persists across
+restarts in `~/dashboard/alerter-state.json` (gitignored), so the auto-deploy
+restarting the alerter doesn't re-fire active alerts.
 
 ### Pi-hole widget
 
@@ -375,9 +391,16 @@ clients show a `curfew` tag instead of a button — to let one on, **name it** i
 `blocked-macs`); the toggle state persists in `dashboard/block-unknown`. Manual
 per-device blocks still apply independently and survive turning curfew off.
 
-> ⚠️ **Security:** these endpoints are unauthenticated (like the rest of the
-> dashboard) and reconfigure the node's networking. Intended for Tailscale-only
-> access. Credentials are passed to `nmcli` as argv (no shell injection), but a
+> ⚠️ **Security:** the *mutating* WiFi endpoints (`/wifi/connect`, `/wifi/repeater`,
+> `/wifi/stop`, `/wifi/block`, `/wifi/unblock`, `/wifi/block-unknown`) reject any
+> request whose source IP is outside loopback, the AP subnet (`10.42.0.0/24`, or
+> `REPEATER_AP_SUBNET`), or Tailscale — so a stranger on a hotel uplink can't
+> reconfigure the node even though port 9090 is reachable. To allow another
+> network (e.g. your home LAN for on-site raw-IP use), set
+> `TRUSTED_EXTRA_CIDRS=192.168.1.0/24` in the agent's systemd unit. The
+> *read-only* endpoints (`/stats`, `/history`, `/wifi/status`) and the dashboard
+> remain unauthenticated — Tailscale-only access is still the intended posture.
+> Credentials are passed to `nmcli` as argv (no shell injection), but a
 > PSK/password is briefly visible in the node's process list while connecting.
 
 #### Troubleshooting the repeater

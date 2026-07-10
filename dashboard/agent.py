@@ -11,6 +11,8 @@ make that work without a reverse proxy.
 """
 
 import datetime
+import functools
+import ipaddress
 import json
 import os
 import re
@@ -52,6 +54,14 @@ ENFORCE_INTERVAL = 20
 # samples (the dashboard polls every 30s, but guard against bursts).
 HISTORY_RETENTION_DAYS = 7
 MIN_SAMPLE_INTERVAL_SEC = 20
+
+# The background sampler rebuilds the /stats payload (and records a history
+# sample) this often. Requests are served from the cached payload, so history
+# is continuous from boot — with or without anyone watching — and /stats
+# answers in milliseconds instead of blocking on subprocess calls.
+SAMPLE_INTERVAL_SEC = 30
+_stats_cache_lock = threading.Lock()
+_stats_cache = {"built": 0.0, "payload": None}
 
 # Friendly role labels per host. Falls back to a generic label when the
 # hostname is not known.
@@ -186,6 +196,66 @@ KNOWN_DEVICES = {
     "f2:15:67:f6:d0:ea": "Work phone",
     "a6:79:f7:2a:90:33": "Personal",
 }
+
+# ---- Trusted-source gate for mutating endpoints -------------------------
+# The WiFi config/block endpoints reconfigure the node's networking, so they
+# only accept requests from networks we control: loopback, the repeater AP
+# subnet, and Tailscale. On a hotel/airport uplink the rest of the hotel LAN
+# can reach port 9090 — those callers get a 403. Extend with a comma-separated
+# TRUSTED_EXTRA_CIDRS env var (e.g. your home LAN for on-site raw-IP use).
+_TRUSTED_CIDRS = [
+    "127.0.0.0/8",
+    "::1/128",
+    os.environ.get("REPEATER_AP_SUBNET", "10.42.0.0/24"),
+    "100.64.0.0/10",          # Tailscale IPv4 (CGNAT range)
+    "fd7a:115c:a1e0::/48",    # Tailscale IPv6
+]
+_TRUSTED_CIDRS += [
+    c.strip()
+    for c in os.environ.get("TRUSTED_EXTRA_CIDRS", "").split(",")
+    if c.strip()
+]
+_TRUSTED_NETS = []
+for _c in _TRUSTED_CIDRS:
+    try:
+        _TRUSTED_NETS.append(ipaddress.ip_network(_c, strict=False))
+    except ValueError:
+        pass  # ignore a malformed extra CIDR rather than crash the agent
+
+
+def _client_ip():
+    addr = request.remote_addr or ""
+    # A dual-stack socket reports IPv4 clients as IPv4-mapped IPv6
+    # ("::ffff:1.2.3.4"); strip to the real address.
+    if addr.startswith("::ffff:"):
+        addr = addr[len("::ffff:"):]
+    return addr
+
+
+def _trusted_request():
+    try:
+        ip = ipaddress.ip_address(_client_ip())
+    except ValueError:
+        return False
+    return any(ip in net for net in _TRUSTED_NETS)
+
+
+def require_trusted_source(fn):
+    """403 mutating requests from untrusted networks. OPTIONS passes through
+    so CORS preflight still works and the browser can read our error JSON."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if request.method != "OPTIONS" and not _trusted_request():
+            return jsonify({
+                "ok": False,
+                "error": "WiFi config is only allowed from the AP subnet, "
+                         "Tailscale, or the node itself (your address: "
+                         f"{_client_ip() or 'unknown'}). Set "
+                         "TRUSTED_EXTRA_CIDRS in the agent unit to allow "
+                         "another network.",
+            }), 403
+        return fn(*args, **kwargs)
+    return wrapper
 
 
 @app.after_request
@@ -1199,15 +1269,14 @@ def get_uptime():
     return " ".join(parts)
 
 
-@app.route("/stats")
-def stats():
+def build_payload():
+    """Collect everything /stats reports. Slow (subprocesses + a 1s CPU
+    sample) — called by the background sampler, not per-request."""
     hostname = socket.gethostname()
     disk = psutil.disk_usage("/")
     ram = psutil.virtual_memory()
     cpu_percent = psutil.cpu_percent(interval=1)
     temp = get_cpu_temp()
-
-    record_sample(cpu_percent, temp, ram.percent, disk.percent)
 
     network = get_tailscale_status()
     network.update(get_network_throughput())
@@ -1256,6 +1325,37 @@ def stats():
     if has_iface(WIFI_IFACE):
         payload["wifi"] = get_wifi_status()
 
+    return payload, (cpu_percent, temp, ram.percent, disk.percent)
+
+
+def _refresh_stats_cache():
+    """Rebuild the /stats payload, cache it, and record a history sample."""
+    payload, sample = build_payload()
+    with _stats_cache_lock:
+        _stats_cache["payload"] = payload
+        _stats_cache["built"] = time.time()
+    record_sample(*sample)
+    return payload
+
+
+def _sampler_loop():
+    while True:
+        try:
+            _refresh_stats_cache()
+        except Exception:
+            pass  # never let one bad tick kill sampling
+        time.sleep(SAMPLE_INTERVAL_SEC)
+
+
+@app.route("/stats")
+def stats():
+    with _stats_cache_lock:
+        payload = _stats_cache["payload"]
+        age = time.time() - _stats_cache["built"]
+    # Serve the cache; rebuild synchronously only if the sampler hasn't
+    # produced anything yet (first seconds after boot) or has wedged.
+    if payload is None or age > SAMPLE_INTERVAL_SEC * 3:
+        payload = _refresh_stats_cache()
     return jsonify(payload)
 
 
@@ -1267,6 +1367,7 @@ def wifi_status():
 
 
 @app.route("/wifi/connect", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_connect_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1299,6 +1400,7 @@ def wifi_connect_route():
 
 
 @app.route("/wifi/repeater", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_repeater_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1344,6 +1446,7 @@ def wifi_repeater_route():
 
 
 @app.route("/wifi/stop", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_stop_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1353,6 +1456,7 @@ def wifi_stop_route():
 
 
 @app.route("/wifi/block", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_block_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1361,6 +1465,7 @@ def wifi_block_route():
 
 
 @app.route("/wifi/unblock", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_unblock_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1369,6 +1474,7 @@ def wifi_unblock_route():
 
 
 @app.route("/wifi/block-unknown", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_block_unknown_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1399,6 +1505,11 @@ def health():
 
 init_db()
 reapply_blocklist()
+# Prime psutil's CPU counter (its first interval=None call returns 0.0),
+# then sample continuously in the background — history no longer depends
+# on someone polling /stats.
+psutil.cpu_percent(interval=None)
+threading.Thread(target=_sampler_loop, daemon=True).start()
 # Background enforcer for curfew mode (block clients not in KNOWN_DEVICES).
 # Only meaningful where there's an AP radio; harmless otherwise.
 if has_iface(WIFI_AP_IFACE):

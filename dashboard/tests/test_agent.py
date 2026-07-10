@@ -1,19 +1,137 @@
-"""Tests for the Meshtastic collector in agent.py.
+"""Smoke tests for agent.py endpoints, plus the Meshtastic collector.
 
-Only the parts that are safe to exercise without a real radio or a
-`meshtastic` package install: the unconfigured-host short-circuit and the
-"failure is cached as None, never raises" behavior. Run with:
+Everything here is safe to run on a bare CI runner: no Docker, tailscale,
+nmcli, wlan interfaces, or a Meshtastic radio required — the agent degrades
+gracefully around all of them, and these tests pin that behavior. Run with:
 
     cd dashboard && pytest tests -q
 """
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import agent  # noqa: E402
 
+
+def client():
+    agent.app.config["TESTING"] = True
+    return agent.app.test_client()
+
+
+# ---- Endpoint smoke tests ----------------------------------------------
+
+def test_health():
+    res = client().get("/health")
+    assert res.status_code == 200
+    assert res.get_json() == {"status": "ok"}
+
+
+def test_stats_shape():
+    res = client().get("/stats")
+    assert res.status_code == 200
+    data = res.get_json()
+    for key in ("hostname", "role", "uptime", "cpu", "ram", "disk",
+                "network", "containers", "timestamp"):
+        assert key in data, f"missing {key}"
+    assert isinstance(data["cpu"]["percent"], (int, float))
+    assert isinstance(data["containers"], list)
+
+
+def test_history_shape():
+    res = client().get("/history?hours=24")
+    assert res.status_code == 200
+    data = res.get_json()
+    for key in ("ts", "cpu", "temp", "ram", "disk"):
+        assert isinstance(data[key], list)
+
+
+def test_history_bad_hours_falls_back():
+    res = client().get("/history?hours=banana")
+    assert res.status_code == 200
+
+
+def test_cors_headers():
+    res = client().get("/health")
+    assert res.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_wifi_routes_without_interface():
+    # CI runners have no wlan0, so these must 400 cleanly (and must NOT
+    # reach any sudo/nmcli code path).
+    c = client()
+    assert c.get("/wifi/status").status_code == 400
+    assert c.post("/wifi/connect", json={"ssid": "x"}).status_code == 400
+
+
+# ---- Background sampler / stats cache -----------------------------------
+
+def test_build_payload_shape():
+    payload, sample = agent.build_payload()
+    assert payload["hostname"]
+    assert len(sample) == 4  # (cpu, temp, ram, disk) for record_sample
+
+
+def test_stats_served_from_cache():
+    # Wait for the sampler's first build so both reads land inside one
+    # stable 30s window (no rebuild can happen between them).
+    for _ in range(100):
+        with agent._stats_cache_lock:
+            if agent._stats_cache["payload"] is not None:
+                break
+        time.sleep(0.1)
+    c = client()
+    a = c.get("/stats").get_json()
+    b = c.get("/stats").get_json()
+    # Identical build timestamp proves no per-request collection happened.
+    assert a["timestamp"] == b["timestamp"]
+
+
+# ---- Trusted-source gate on mutating WiFi endpoints ---------------------
+
+def test_wifi_mutations_blocked_from_untrusted_ip():
+    c = client()
+    for path in ("/wifi/connect", "/wifi/repeater", "/wifi/stop",
+                 "/wifi/block", "/wifi/unblock", "/wifi/block-unknown"):
+        res = c.post(path, json={}, environ_base={"REMOTE_ADDR": "203.0.113.9"})
+        assert res.status_code == 403, path
+        assert res.get_json()["ok"] is False
+
+
+def test_wifi_mutations_pass_gate_from_localhost():
+    c = client()
+    # Localhost must get PAST the gate. With no wlan0 on the CI runner the
+    # route then fails its own interface check (400), never 403.
+    res = c.post("/wifi/connect", json={"ssid": "x"},
+                 environ_base={"REMOTE_ADDR": "127.0.0.1"})
+    assert res.status_code == 400
+
+
+def test_wifi_gate_allows_tailscale_and_ap_subnet():
+    c = client()
+    for addr in ("100.101.102.103", "10.42.0.55"):
+        res = c.post("/wifi/connect", json={"ssid": "x"},
+                     environ_base={"REMOTE_ADDR": addr})
+        assert res.status_code == 400, addr  # past the gate, no iface → 400
+
+
+def test_wifi_gate_strips_ipv4_mapped_ipv6():
+    c = client()
+    res = c.post("/wifi/connect", json={"ssid": "x"},
+                 environ_base={"REMOTE_ADDR": "::ffff:127.0.0.1"})
+    assert res.status_code == 400  # trusted after stripping the prefix
+
+
+def test_wifi_gate_preflight_passes():
+    c = client()
+    res = c.open("/wifi/connect", method="OPTIONS",
+                 environ_base={"REMOTE_ADDR": "203.0.113.9"})
+    assert res.status_code == 204
+
+
+# ---- Meshtastic collector ----------------------------------------------
 
 def test_meshtastic_unconfigured_host_returns_none():
     assert agent.get_meshtastic_status("not-a-configured-host") is None

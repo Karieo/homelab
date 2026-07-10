@@ -140,6 +140,34 @@ Environment=REMNDRS_COUNT_URL=http://localhost:3000/api/reminders/open/count
 # Environment=REMNDRS_TOKEN=your-token    # sent as a Bearer header if set
 ```
 
+### Meshtastic widget
+
+On a node with a Meshtastic radio (bastion and scout both carry one), install the
+`meshtastic` Python package — it's deliberately left out of `requirements.txt`
+since it's heavy and only needed on nodes with a radio:
+
+```bash
+pip3 install --break-system-packages meshtastic
+```
+
+The agent talks to the radio over its **TCP API** (port 4403, via `meshtasticd`
+or a WiFi-attached device), so it works the same whether the radio is on that
+node's USB port or reachable over the network. Host is selected via the
+`MESHTASTIC` map in `agent.py` (defaults to `localhost` on both `bastion` and
+`scout`, overridable per-node with `MESHTASTIC_HOST`):
+
+```ini
+Environment=MESHTASTIC_HOST=localhost
+```
+
+The widget reports node count, battery (`PWR` when on USB power), channel
+utilization, and time since another node was last heard. It polls at most
+once every 60 seconds (radio queries are slow) and hides itself entirely —
+no error box, no dashes — when the package isn't installed or the radio's
+unreachable. A `meshtastic` row also appears in each node's SERVICES list
+once `meshtasticd.service` is installed; nodes without it show no row at all
+rather than a false "stopped" dot.
+
 ### Alerts
 
 Install the alerter on **bastion** (it polls all nodes):

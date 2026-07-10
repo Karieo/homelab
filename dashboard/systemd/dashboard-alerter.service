@@ -20,6 +20,9 @@ EnvironmentFile=-/home/clay/dashboard/notify.env
 # Environment=ALERT_TEMP_HIGH=80
 # Environment=ALERT_TEMP_CLEAR=72
 # Environment=ALERT_POLL_SEC=60
+# Environment=ALERT_DISK_HIGH=90
+# Environment=ALERT_DISK_CLEAR=85
+# Environment=ALERT_SVC_AFTER=2
 
 [Install]
 WantedBy=multi-user.target

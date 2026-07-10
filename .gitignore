@@ -2,6 +2,7 @@
 dashboard/stats.db
 dashboard/blocked-macs
 dashboard/block-unknown
+dashboard/alerter-state.json
 
 # Local secrets (Discord/ntfy webhook, etc.) — never commit
 dashboard/notify.env

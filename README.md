@@ -199,10 +199,17 @@ For Discord, create the webhook in the target channel: **Server Settings →
 Integrations → Webhooks → New Webhook → Copy Webhook URL**. Alerts arrive as
 colored embeds (red for offline / hot, green for recovered).
 
-Alerts fire on transitions only (offline ⇄ online, temp high ⇄ cleared) with
-hysteresis, so a persistently-hot node won't spam. Tunables: `ALERT_TEMP_HIGH`
-(default 80°C), `ALERT_TEMP_CLEAR` (72°C), `ALERT_POLL_SEC` (60),
-`ALERT_OFFLINE_AFTER` (2), `ALERT_NODES`.
+Alerts fire on transitions only (offline ⇄ online, temp high ⇄ cleared, disk
+full ⇄ cleared, service down ⇄ back up) with hysteresis and debounce, so a
+persistently-hot node or a container restarting during a deploy won't spam.
+Disk alerts cover the root disk and any `extra_disks`; service alerts cover
+everything the agent reports (containers + `EXTRA_SERVICES`), and a service
+that's removed on purpose is forgotten silently. Tunables: `ALERT_TEMP_HIGH`
+(default 80°C), `ALERT_TEMP_CLEAR` (72°C), `ALERT_DISK_HIGH` (90%),
+`ALERT_DISK_CLEAR` (85%), `ALERT_SVC_AFTER` (2 polls), `ALERT_POLL_SEC` (60),
+`ALERT_OFFLINE_AFTER` (2), `ALERT_NODES`. Hysteresis state persists across
+restarts in `~/dashboard/alerter-state.json` (gitignored), so the auto-deploy
+restarting the alerter doesn't re-fire active alerts.
 
 ### Pi-hole widget
 

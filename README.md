@@ -381,9 +381,16 @@ clients show a `curfew` tag instead of a button — to let one on, **name it** i
 `blocked-macs`); the toggle state persists in `dashboard/block-unknown`. Manual
 per-device blocks still apply independently and survive turning curfew off.
 
-> ⚠️ **Security:** these endpoints are unauthenticated (like the rest of the
-> dashboard) and reconfigure the node's networking. Intended for Tailscale-only
-> access. Credentials are passed to `nmcli` as argv (no shell injection), but a
+> ⚠️ **Security:** the *mutating* WiFi endpoints (`/wifi/connect`, `/wifi/repeater`,
+> `/wifi/stop`, `/wifi/block`, `/wifi/unblock`, `/wifi/block-unknown`) reject any
+> request whose source IP is outside loopback, the AP subnet (`10.42.0.0/24`, or
+> `REPEATER_AP_SUBNET`), or Tailscale — so a stranger on a hotel uplink can't
+> reconfigure the node even though port 9090 is reachable. To allow another
+> network (e.g. your home LAN for on-site raw-IP use), set
+> `TRUSTED_EXTRA_CIDRS=192.168.1.0/24` in the agent's systemd unit. The
+> *read-only* endpoints (`/stats`, `/history`, `/wifi/status`) and the dashboard
+> remain unauthenticated — Tailscale-only access is still the intended posture.
+> Credentials are passed to `nmcli` as argv (no shell injection), but a
 > PSK/password is briefly visible in the node's process list while connecting.
 
 #### Troubleshooting the repeater

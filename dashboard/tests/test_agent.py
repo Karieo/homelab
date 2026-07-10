@@ -65,6 +65,48 @@ def test_wifi_routes_without_interface():
     assert c.post("/wifi/connect", json={"ssid": "x"}).status_code == 400
 
 
+# ---- Trusted-source gate on mutating WiFi endpoints ---------------------
+
+def test_wifi_mutations_blocked_from_untrusted_ip():
+    c = client()
+    for path in ("/wifi/connect", "/wifi/repeater", "/wifi/stop",
+                 "/wifi/block", "/wifi/unblock", "/wifi/block-unknown"):
+        res = c.post(path, json={}, environ_base={"REMOTE_ADDR": "203.0.113.9"})
+        assert res.status_code == 403, path
+        assert res.get_json()["ok"] is False
+
+
+def test_wifi_mutations_pass_gate_from_localhost():
+    c = client()
+    # Localhost must get PAST the gate. With no wlan0 on the CI runner the
+    # route then fails its own interface check (400), never 403.
+    res = c.post("/wifi/connect", json={"ssid": "x"},
+                 environ_base={"REMOTE_ADDR": "127.0.0.1"})
+    assert res.status_code == 400
+
+
+def test_wifi_gate_allows_tailscale_and_ap_subnet():
+    c = client()
+    for addr in ("100.101.102.103", "10.42.0.55"):
+        res = c.post("/wifi/connect", json={"ssid": "x"},
+                     environ_base={"REMOTE_ADDR": addr})
+        assert res.status_code == 400, addr  # past the gate, no iface → 400
+
+
+def test_wifi_gate_strips_ipv4_mapped_ipv6():
+    c = client()
+    res = c.post("/wifi/connect", json={"ssid": "x"},
+                 environ_base={"REMOTE_ADDR": "::ffff:127.0.0.1"})
+    assert res.status_code == 400  # trusted after stripping the prefix
+
+
+def test_wifi_gate_preflight_passes():
+    c = client()
+    res = c.open("/wifi/connect", method="OPTIONS",
+                 environ_base={"REMOTE_ADDR": "203.0.113.9"})
+    assert res.status_code == 204
+
+
 # ---- Meshtastic collector ----------------------------------------------
 
 def test_meshtastic_unconfigured_host_returns_none():

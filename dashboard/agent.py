@@ -11,6 +11,8 @@ make that work without a reverse proxy.
 """
 
 import datetime
+import functools
+import ipaddress
 import json
 import os
 import re
@@ -186,6 +188,66 @@ KNOWN_DEVICES = {
     "f2:15:67:f6:d0:ea": "Work phone",
     "a6:79:f7:2a:90:33": "Personal",
 }
+
+# ---- Trusted-source gate for mutating endpoints -------------------------
+# The WiFi config/block endpoints reconfigure the node's networking, so they
+# only accept requests from networks we control: loopback, the repeater AP
+# subnet, and Tailscale. On a hotel/airport uplink the rest of the hotel LAN
+# can reach port 9090 — those callers get a 403. Extend with a comma-separated
+# TRUSTED_EXTRA_CIDRS env var (e.g. your home LAN for on-site raw-IP use).
+_TRUSTED_CIDRS = [
+    "127.0.0.0/8",
+    "::1/128",
+    os.environ.get("REPEATER_AP_SUBNET", "10.42.0.0/24"),
+    "100.64.0.0/10",          # Tailscale IPv4 (CGNAT range)
+    "fd7a:115c:a1e0::/48",    # Tailscale IPv6
+]
+_TRUSTED_CIDRS += [
+    c.strip()
+    for c in os.environ.get("TRUSTED_EXTRA_CIDRS", "").split(",")
+    if c.strip()
+]
+_TRUSTED_NETS = []
+for _c in _TRUSTED_CIDRS:
+    try:
+        _TRUSTED_NETS.append(ipaddress.ip_network(_c, strict=False))
+    except ValueError:
+        pass  # ignore a malformed extra CIDR rather than crash the agent
+
+
+def _client_ip():
+    addr = request.remote_addr or ""
+    # A dual-stack socket reports IPv4 clients as IPv4-mapped IPv6
+    # ("::ffff:1.2.3.4"); strip to the real address.
+    if addr.startswith("::ffff:"):
+        addr = addr[len("::ffff:"):]
+    return addr
+
+
+def _trusted_request():
+    try:
+        ip = ipaddress.ip_address(_client_ip())
+    except ValueError:
+        return False
+    return any(ip in net for net in _TRUSTED_NETS)
+
+
+def require_trusted_source(fn):
+    """403 mutating requests from untrusted networks. OPTIONS passes through
+    so CORS preflight still works and the browser can read our error JSON."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if request.method != "OPTIONS" and not _trusted_request():
+            return jsonify({
+                "ok": False,
+                "error": "WiFi config is only allowed from the AP subnet, "
+                         "Tailscale, or the node itself (your address: "
+                         f"{_client_ip() or 'unknown'}). Set "
+                         "TRUSTED_EXTRA_CIDRS in the agent unit to allow "
+                         "another network.",
+            }), 403
+        return fn(*args, **kwargs)
+    return wrapper
 
 
 @app.after_request
@@ -1267,6 +1329,7 @@ def wifi_status():
 
 
 @app.route("/wifi/connect", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_connect_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1299,6 +1362,7 @@ def wifi_connect_route():
 
 
 @app.route("/wifi/repeater", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_repeater_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1344,6 +1408,7 @@ def wifi_repeater_route():
 
 
 @app.route("/wifi/stop", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_stop_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1353,6 +1418,7 @@ def wifi_stop_route():
 
 
 @app.route("/wifi/block", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_block_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1361,6 +1427,7 @@ def wifi_block_route():
 
 
 @app.route("/wifi/unblock", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_unblock_route():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1369,6 +1436,7 @@ def wifi_unblock_route():
 
 
 @app.route("/wifi/block-unknown", methods=["POST", "OPTIONS"])
+@require_trusted_source
 def wifi_block_unknown_route():
     if request.method == "OPTIONS":
         return ("", 204)

@@ -20,6 +20,8 @@ User=clay
 # Environment=REMNDRS_COUNT_URL=http://localhost:3000/api/reminders/open/count
 # Meshtastic widget (node running meshtasticd / radio with TCP API):
 # Environment=MESHTASTIC_HOST=localhost
+# Allow WiFi config from an extra network (default: AP subnet + Tailscale + localhost):
+# Environment=TRUSTED_EXTRA_CIDRS=192.168.1.0/24
 
 [Install]
 WantedBy=multi-user.target

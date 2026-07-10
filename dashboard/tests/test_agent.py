@@ -1,8 +1,8 @@
-"""Tests for the Meshtastic collector in agent.py.
+"""Smoke tests for agent.py endpoints, plus the Meshtastic collector.
 
-Only the parts that are safe to exercise without a real radio or a
-`meshtastic` package install: the unconfigured-host short-circuit and the
-"failure is cached as None, never raises" behavior. Run with:
+Everything here is safe to run on a bare CI runner: no Docker, tailscale,
+nmcli, wlan interfaces, or a Meshtastic radio required — the agent degrades
+gracefully around all of them, and these tests pin that behavior. Run with:
 
     cd dashboard && pytest tests -q
 """
@@ -14,6 +14,58 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import agent  # noqa: E402
 
+
+def client():
+    agent.app.config["TESTING"] = True
+    return agent.app.test_client()
+
+
+# ---- Endpoint smoke tests ----------------------------------------------
+
+def test_health():
+    res = client().get("/health")
+    assert res.status_code == 200
+    assert res.get_json() == {"status": "ok"}
+
+
+def test_stats_shape():
+    res = client().get("/stats")
+    assert res.status_code == 200
+    data = res.get_json()
+    for key in ("hostname", "role", "uptime", "cpu", "ram", "disk",
+                "network", "containers", "timestamp"):
+        assert key in data, f"missing {key}"
+    assert isinstance(data["cpu"]["percent"], (int, float))
+    assert isinstance(data["containers"], list)
+
+
+def test_history_shape():
+    res = client().get("/history?hours=24")
+    assert res.status_code == 200
+    data = res.get_json()
+    for key in ("ts", "cpu", "temp", "ram", "disk"):
+        assert isinstance(data[key], list)
+
+
+def test_history_bad_hours_falls_back():
+    res = client().get("/history?hours=banana")
+    assert res.status_code == 200
+
+
+def test_cors_headers():
+    res = client().get("/health")
+    assert res.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_wifi_routes_without_interface():
+    # CI runners have no wlan0, so these must 400 cleanly (and must NOT
+    # reach any sudo/nmcli code path).
+    c = client()
+    assert c.get("/wifi/status").status_code == 400
+    assert c.post("/wifi/connect", json={"ssid": "x"}).status_code == 400
+
+
+# ---- Meshtastic collector ----------------------------------------------
 
 def test_meshtastic_unconfigured_host_returns_none():
     assert agent.get_meshtastic_status("not-a-configured-host") is None

@@ -77,6 +77,14 @@ main() {
     exit 1
   fi
 
+  # Snapshot the currently-staged files so a broken deploy can be rolled back.
+  local BACKUP="${DEST}/.rollback" f
+  rm -rf "$BACKUP"
+  mkdir -p "$BACKUP"
+  for f in agent.py index.html alerter.py update.sh; do
+    [ -f "${DEST}/${f}" ] && cp "${DEST}/${f}" "${BACKUP}/${f}"
+  done
+
   echo "==> Staging files into ${DEST}"
   mkdir -p "$DEST"
   cp "${SRC}/agent.py" "${DEST}/agent.py"
@@ -96,6 +104,46 @@ main() {
       sudo systemctl restart "${svc}.service" && echo "restarted ${svc}"
     fi
   done
+
+  # Post-deploy health check: if this node runs the agent, make sure it came
+  # back up. On failure, restore the previous files and restart again. The
+  # repo stays at the new commit (fast-forward only, never rolled back), so
+  # the next timer tick sees "up to date" and leaves the node healthy on the
+  # old files until a fix is pushed.
+  if systemctl list-unit-files dashboard-agent.service --no-legend 2>/dev/null \
+       | grep -q dashboard-agent.service; then
+    local healthy=0 i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      if curl -fsS -m 3 http://localhost:9090/health >/dev/null 2>&1; then
+        healthy=1
+        break
+      fi
+      sleep 5
+    done
+    if [ "$healthy" != "1" ]; then
+      echo "ERROR: agent failed health check after deploy — rolling back files" >&2
+      local restored=0
+      for f in agent.py index.html alerter.py update.sh; do
+        if [ -f "${BACKUP}/${f}" ]; then
+          cp "${BACKUP}/${f}" "${DEST}/${f}"
+          restored=1
+        fi
+      done
+      [ -f "${DEST}/update.sh" ] && chmod +x "${DEST}/update.sh"
+      if [ "$restored" = "1" ]; then
+        for svc in dashboard-agent dashboard-alerter dashboard; do
+          if systemctl list-unit-files "${svc}.service" --no-legend 2>/dev/null \
+               | grep -q "${svc}.service"; then
+            sudo systemctl restart "${svc}.service" || true
+          fi
+        done
+        notify_deploy fail "deploy ${REMOTE:0:8} FAILED health check — rolled back staged files to ${LOCAL:0:8} (repo left at ${REMOTE:0:8})"
+      else
+        notify_deploy fail "deploy ${REMOTE:0:8} FAILED health check — nothing to roll back (first install?)"
+      fi
+      exit 1
+    fi
+  fi
 
   local SUBJECT
   SUBJECT="$(git log -1 --pretty=%s "$REMOTE" 2>/dev/null || echo "")"

@@ -88,6 +88,12 @@ Notes:
 - **Deploy pings:** if a notification channel is configured (see below), each
   successful deploy posts `<host> deploy — updated <old> → <new> — <commit>` to
   Discord/ntfy (green), and a fast-forward failure posts a red alert.
+- **Health check + rollback:** on nodes running the agent, each deploy is
+  verified against `localhost:9090/health` (up to ~60s). If the agent doesn't
+  come back, the previously-staged files are restored, services restarted, and
+  a red notification sent. The git repo stays at the new commit (fast-forward
+  only), so the node idles healthy on the old files instead of retry-looping —
+  push a fix, or run `update.sh --force` to retry the same commit.
 
 #### Shared notification config (`notify.env`)
 
